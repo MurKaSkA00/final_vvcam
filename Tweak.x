@@ -1,7 +1,5 @@
-// Tweak.x - MediaPlaybackUtils v1.6.0
-// FIX 6: Telegram краш — безопасный свиззлинг с проверкой capturedIMP
-// FIX 7: Моргание — защита от множественных DisplayLink + overlay
-// FIX 8: Chrome/WebRTC — хук через AVCaptureSession вместо WebKit bypass
+// Tweak.x - MediaPlaybackUtils v1.6.1
+// _lastBuffer, _v_lock, _enabled — глобальные (без static) для WebRTCHooks.x
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -13,15 +11,15 @@
 
 #define MPU_PREFS_ID CFSTR("com.proximacore.mediaplaybackutils")
 
-static BOOL              _enabled          = YES;
-static NSString         *_url              = @"http://192.168.1.44:8888/live/stream/index.m3u8";
-static _MPUMediaBufferAdapter *_reader     = nil;
-static CVPixelBufferRef  _lastBuffer       = NULL;
-static CFTimeInterval    _lastBufferTime   = 0;
-static id                _v_lock           = nil;
-static CIContext        *_v_ciContext      = nil;
-static NSString         *_currentStreamURL = nil;
-static BOOL              _isSwitching      = NO;
+BOOL              _enabled          = YES;
+NSString         *_url              = @"http://192.168.1.44:8888/live/stream/index.m3u8";
+_MPUMediaBufferAdapter *_reader     = nil;
+CVPixelBufferRef  _lastBuffer       = NULL;
+CFTimeInterval    _lastBufferTime   = 0;
+id                _v_lock           = nil;
+CIContext        *_v_ciContext      = nil;
+NSString         *_currentStreamURL = nil;
+BOOL              _isSwitching      = NO;
 
 static void _v_loadPrefs(void) {
     CFPreferencesAppSynchronize(MPU_PREFS_ID);
@@ -124,8 +122,6 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
     if (!cls) { %orig; return; }
     NSString *clsName = NSStringFromClass(cls);
 
-    // FIX 6: убрали WK/WebKit из исключений — Chrome тоже должен перехватываться
-    // Оставляем только реально опасные системные префиксы
     if ([clsName hasPrefix:@"RCT"] ||
         [clsName hasPrefix:@"_"]) { %orig; return; }
 
@@ -159,15 +155,12 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
                     }
                 });
 
-                // FIX 6: безопасный свиззлинг — если replaceMethod вернул NULL
-                // берём IMP заново через getInstanceMethod (метод в суперклассе)
                 BOOL added = class_addMethod(cls, sel, newIMP, types);
                 if (!added) {
                     IMP prev = class_replaceMethod(cls, sel, newIMP, types);
                     if (prev) {
                         capturedIMP = prev;
                     } else {
-                        // Метод унаследован — берём актуальный IMP
                         Method m2 = class_getInstanceMethod(cls, sel);
                         if (m2) capturedIMP = method_getImplementation(m2);
                     }
@@ -269,8 +262,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
     if (!_enabled) return;
     _v_init();
 
-    // FIX 7: проверяем есть ли уже overlay — если есть, только обновляем frame
-    // НЕ создаём новый DisplayLink каждый раз когда вызывается layoutSublayers
     CALayer *overlay = objc_getAssociatedObject(self, "_v_overlay");
     if (!overlay) {
         overlay = [CALayer layer];
@@ -282,7 +273,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
         objc_setAssociatedObject(self, "_v_overlay", overlay,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-        // FIX 7: DisplayLink создаётся ОДИН РАЗ — только когда overlay новый
         CADisplayLink *dl = [CADisplayLink displayLinkWithTarget:self
                                                         selector:@selector(_mpu_updateOverlay:)];
         dl.preferredFramesPerSecond = 30;
@@ -292,7 +282,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
         NSLog(@"[MPU] Overlay + DisplayLink created");
     }
 
-    // Просто обновляем frame — без сброса contents
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     overlay.frame = self.bounds;
@@ -302,7 +291,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
 }
 
 - (void)removeFromSuperlayer {
-    // FIX 7: инвалидируем DisplayLink когда слой удаляется
     CADisplayLink *dl = objc_getAssociatedObject(self, "_v_displayLink");
     if (dl) {
         [dl invalidate];
@@ -437,7 +425,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
         if ([bid hasPrefix:@"com.apple.springboard"])   return;
-        if ([bid hasPrefix:@"com.apple.WebKit"])         return;
         if ([bid hasPrefix:@"com.apple.mediaserverd"])   return;
         if ([bid hasPrefix:@"com.apple.assetsd"])        return;
         if ([bid hasPrefix:@"com.apple.coremedia"])      return;
