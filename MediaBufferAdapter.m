@@ -1,6 +1,6 @@
-// MediaBufferAdapter.m - MediaPlaybackUtils v1.5.2
-// Auto-detects MJPEG vs HLS/AVPlayer by Content-Type header
-// Fallback: если MJPEG не даёт кадры за 5 секунд — переключается на AVPlayer
+// MediaBufferAdapter.m - MediaPlaybackUtils v1.6.0
+// FIX задержка: правильное время для AVPlayerItemVideoOutput
+// FIX моргание: убрали hasNewPixelBufferForItemTime — он пропускал кадры
 
 #import "_MPUMediaBufferAdapter.h"
 #import <AVFoundation/AVFoundation.h>
@@ -41,7 +41,6 @@
         }];
 
         NSString *path = url.path.lowercaseString ?: @"";
-        // HLS если явно .m3u8 или rtsp://
         _isHLS = [path hasSuffix:@".m3u8"] ||
                  [url.scheme isEqualToString:@"rtsp"];
 
@@ -97,7 +96,6 @@
         [self.hlsPlayerItem addOutput:self.videoOutput];
         [self.hlsPlayer play];
 
-        // DisplayLink на отдельном runloop чтобы не блокировать main thread приложения
         self.displayLink = [CADisplayLink displayLinkWithTarget:self
                                                        selector:@selector(displayLinkCallback:)];
         self.displayLink.preferredFramesPerSecond = 30;
@@ -126,12 +124,25 @@
 
 - (void)displayLinkCallback:(CADisplayLink *)sender {
     if (!self.isRunning) return;
-    CMTime currentTime = [self.hlsPlayer currentTime];
-    if (![self.videoOutput hasNewPixelBufferForItemTime:currentTime]) return;
 
+    // FIX задержка: используем outputTime из displayLink — это точное время
+    // следующего кадра экрана, что даёт минимальную задержку
+    CFTimeInterval nextTimestamp = sender.targetTimestamp;
+    CMTime outputTime = CMTimeMakeWithSeconds(nextTimestamp, 600);
+
+    // FIX моргание: убрали hasNewPixelBufferForItemTime —
+    // он возвращал NO даже когда кадр был готов, вызывая пропуски
     CVPixelBufferRef pixelBuffer =
-        [self.videoOutput copyPixelBufferForItemTime:currentTime
+        [self.videoOutput copyPixelBufferForItemTime:outputTime
                                   itemTimeForDisplay:nil];
+
+    // Fallback: если по nextTimestamp нет кадра — берём текущее время плеера
+    if (!pixelBuffer) {
+        CMTime currentTime = [self.hlsPlayer currentTime];
+        pixelBuffer = [self.videoOutput copyPixelBufferForItemTime:currentTime
+                                               itemTimeForDisplay:nil];
+    }
+
     if (!pixelBuffer) return;
 
     self->_frameCount++;
@@ -392,7 +403,6 @@ didCompleteWithError:(NSError *)error {
         }
         if (self.isRunning && !self.reconnectScheduled) {
             self.reconnectScheduled = YES;
-            // FIX быстрая смена: было 3.0с → 0.3с для мгновенного переключения
             NSLog(@"[MPUAdapter] Reconnecting in 0.3s...");
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
