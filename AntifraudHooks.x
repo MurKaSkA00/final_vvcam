@@ -1,6 +1,4 @@
-// AntifraudHooks.x - MediaPlaybackUtils v1.5.1
-// Скрывает виртуальную камеру от приложений.
-// ИСПРАВЛЕНИЕ v1.5.1: dispatch_async предотвращает краши при старте.
+// AntifraudHooks.x - MediaPlaybackUtils v1.5.2
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -21,25 +19,7 @@ static NSString *hook_NSStringFromClass(Class cls) {
     return r;
 }
 
-// ── OVERLAY: убираем из sublayers для внешних инспекторов ────────────────────
-
-%hook AVCaptureVideoPreviewLayer
-
-- (NSArray<CALayer *> *)sublayers {
-    NSArray<CALayer *> *orig = %orig;
-    if (!orig) return orig;
-    NSMutableArray *clean = [orig mutableCopy];
-    NSMutableArray *toRemove = [NSMutableArray array];
-    for (CALayer *layer in clean) {
-        if (layer.zPosition == 999999) {
-            [toRemove addObject:layer];
-        }
-    }
-    [clean removeObjectsInArray:toRemove];
-    return clean;
-}
-
-%end
+// ── OVERLAY: УБРАЛИ хук sublayers — он удалял стрим слой и вызывал моргание ──
 
 // ── СКРЫТИЕ МЕТАДАННЫХ УСТРОЙСТВА ────────────────────────────────────────────
 
@@ -84,7 +64,7 @@ static NSString *hook_NSStringFromClass(Class cls) {
 
 %end
 
-// ── СОЕДИНЕНИЕ: говорим что всё активно ──────────────────────────────────────
+// ── СОЕДИНЕНИЕ ────────────────────────────────────────────────────────────────
 
 %hook AVCaptureConnection
 
@@ -104,24 +84,17 @@ static NSString *hook_NSStringFromClass(Class cls) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
-        if ([bid hasPrefix:@"com.apple."]) return;
-        if ([path hasPrefix:@"/usr/"])     return;
-        if ([path hasPrefix:@"/System/"])  return;
-        if ([bid hasPrefix:@"org.coolstar."]) return;
-        if ([bid hasPrefix:@"com.tigisoftware."]) return;
-        if ([bid hasPrefix:@"org.theos."]) return;
-        if ([bid hasPrefix:@"science.xnu."]) return;
-        if ([bid isEqualToString:@"org.coolstar.sileo"]) return;
-        if ([bid isEqualToString:@"com.tigisoftware.Filza"]) return;
-        if ([bid isEqualToString:@"xyz.willy.Zebra"]) return;
-        if ([bid hasPrefix:@"com.opa334.Trollstore"]) return;
-        if ([bid hasPrefix:@"com.opa334.trollstore"]) return;
-        if ([bid hasPrefix:@"com.palera1n"]) return;
-        if ([bid isEqualToString:@"com.google.chrome.ios"]) return;
+        if ([bid hasPrefix:@"com.apple."])          return;
+        if ([path hasPrefix:@"/usr/"])              return;
+        if ([path hasPrefix:@"/System/"])           return;
+        if ([bid hasPrefix:@"org.coolstar."])       return;
+        if ([bid hasPrefix:@"com.tigisoftware."])   return;
+        if ([bid hasPrefix:@"org.theos."])          return;
+        if ([bid hasPrefix:@"science.xnu."])        return;
+        if ([bid isEqualToString:@"xyz.willy.Zebra"])          return;
+        if ([bid hasPrefix:@"com.opa334."])         return;
+        if ([bid hasPrefix:@"com.palera1n"])        return;
 
-        // ИСПРАВЛЕНИЕ: хуки ставятся асинхронно после инициализации приложения.
-        // Предотвращает краши в Telegram, банковских и других приложениях
-        // которые делают integrity check при старте.
         dispatch_async(dispatch_get_main_queue(), ^{
             MSHookFunction((void *)NSStringFromClass,
                            (void *)hook_NSStringFromClass,
