@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Filter</key>
+    <dict>
+        <key>Bundles</key>
+        <array>
+            <string>com.apple.camera</string>
+            <string>com.apple.facetime</string>
+            <string>ph.telegra.Telegraph</string>
+            <string>com.snapchat.snapchat</string>
+            <string>com.burbn.instagram</string>
+            <string>com.zhiliaoapp.musically</string>
+            <string>com.google.ios.youtube</string>
+            <string>com.atebits.Tweetie2</string>
+            <string>com.facebook.Facebook</string>
+            <string>com.paypal.PPClient</string>
+            <string>com.ubercab.UberClient</string>
+            <string>com.skype.skype</string>
+            <string>us.zoom.videomeetings</string>
+            <string>com.microsoft.teams</string>
+        </array>
+    </dict>
+</dict>
+</plist>
