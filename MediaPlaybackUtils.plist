@@ -9,18 +9,31 @@
             <!-- Камера -->
             <string>com.apple.camera</string>
 
+            <!-- Браузеры — WebRTC -->
+            <string>com.apple.mobilesafari</string>
+            <string>com.apple.SafariViewService</string>
+            <string>com.google.chrome.ios</string>
+            <string>com.google.chrome.ios.SafariViewService</string>
+
             <!-- Мессенджеры -->
             <string>ph.telegra.Telegraph</string>
             <string>com.whatsapp.WhatsApp</string>
+            <string>net.whatsapp.WhatsApp</string>
             <string>com.facebook.Messenger</string>
             <string>com.skype.skype</string>
             <string>com.viber.viber</string>
-            <string>net.whatsapp.WhatsApp</string>
-            <string>com.apple.facetime</string>
             <string>com.discord.Discord</string>
             <string>com.google.Hangouts</string>
             <string>com.microsoft.teams</string>
-            <string>com.apple.MobileAddressBook</string>
+
+            <!-- Видеозвонки -->
+            <string>com.apple.facetime</string>
+            <string>us.zoom.videomeetings</string>
+            <string>com.google.meet</string>
+            <string>com.microsoft.skype.SkypeForBusiness</string>
+            <string>com.cisco.webex.meetings</string>
+            <string>com.ringcentral.mobile</string>
+            <string>com.vonage.businessmobile</string>
 
             <!-- Соцсети -->
             <string>com.instagram.Instagram</string>
@@ -34,14 +47,6 @@
             <string>com.tumblr.tumblr</string>
             <string>com.bereal.BeReal</string>
             <string>com.locket.widget</string>
-
-            <!-- Видеозвонки -->
-            <string>us.zoom.videomeetings</string>
-            <string>com.google.meet</string>
-            <string>com.microsoft.skype.SkypeForBusiness</string>
-            <string>com.cisco.webex.meetings</string>
-            <string>com.ringcentral.mobile</string>
-            <string>com.vonage.businessmobile</string>
 
             <!-- Стриминг -->
             <string>tv.twitch.stream</string>
@@ -80,11 +85,6 @@
             <string>com.google.GoogleLens</string>
             <string>com.poshmark.poshmark</string>
             <string>com.offerup.offerup</string>
-
-            <!-- Здоровье и фитнес -->
-            <string>com.apple.Health</string>
-            <string>com.nike.nikeplus-gps</string>
-            <string>com.strava.stravaride</string>
 
             <!-- Прочее -->
             <string>com.google.Gmail</string>
