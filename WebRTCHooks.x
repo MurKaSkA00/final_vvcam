@@ -1,5 +1,5 @@
-// WebRTCHooks.x - MediaPlaybackUtils v1.0.0
-// Перехват WebRTC камеры в Safari и Chrome через RTCVideoSource
+// WebRTCHooks.x - MediaPlaybackUtils v1.1.0
+// Перехват WebRTC камеры — Safari, Chrome, FaceTime, другие приложения
 
 #import <Foundation/Foundation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -8,38 +8,39 @@
 #import <objc/runtime.h>
 #import <substrate.h>
 
-// Эти переменные общие с Tweak.x
 extern CVPixelBufferRef  _lastBuffer;
 extern id                _v_lock;
 extern BOOL              _enabled;
 
-// ── SAFARI (WebKit внутри процесса приложения) ───────────────────────────────
-// Safari использует RTCVideoSource через приватный WebKit фреймворк.
-// Перехватываем на уровне AVCaptureVideoDataOutput делегата в WebKit процессе.
+static NSMutableSet *_webrtc_hooked = nil;
 
 static void _webrtc_hookClass(Class cls) {
     if (!cls) return;
+    NSString *name = NSStringFromClass(cls);
+    if (!name) return;
+
+    @synchronized(_webrtc_hooked) {
+        if ([_webrtc_hooked containsObject:name]) return;
+    }
+
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
     Method m = class_getInstanceMethod(cls, sel);
     if (!m) return;
 
     const char *types = method_getTypeEncoding(m);
-    IMP origIMP = method_getImplementation(m);
-    __block IMP capturedIMP = origIMP;
+    __block IMP capturedIMP = method_getImplementation(m);
 
     IMP newIMP = imp_implementationWithBlock(^(id self_,
         AVCaptureOutput *output,
         CMSampleBufferRef sb,
         AVCaptureConnection *conn) {
 
-        if (!_enabled || !_lastBuffer) {
+        if (!_enabled) {
             ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
                 capturedIMP)(self_, sel, output, sb, conn);
             return;
         }
 
-        // Создаём замену sampleBuffer из нашего _lastBuffer
-        CMVideoFormatDescriptionRef fmt = NULL;
         CVPixelBufferRef src = NULL;
         @synchronized(_v_lock) {
             if (_lastBuffer) src = CVPixelBufferRetain(_lastBuffer);
@@ -52,25 +53,31 @@ static void _webrtc_hookClass(Class cls) {
         }
 
         CMSampleTimingInfo timing;
-        if (CMSampleBufferGetSampleTimingInfo(sb, 0, &timing) != noErr) {
+        if (!sb || CMSampleBufferGetSampleTimingInfo(sb, 0, &timing) != noErr) {
             timing.duration = CMTimeMake(1, 30);
             timing.presentationTimeStamp = CMTimeMakeWithSeconds(CACurrentMediaTime(), 1000000);
             timing.decodeTimeStamp = kCMTimeInvalid;
         }
 
+        CMVideoFormatDescriptionRef fmt = NULL;
         if (CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, src, &fmt) == noErr && fmt) {
             CMSampleBufferRef rep = NULL;
             if (CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, src, fmt, &timing, &rep) == noErr && rep) {
-                ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
-                    capturedIMP)(self_, sel, output, rep, conn);
+                @try {
+                    ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
+                        capturedIMP)(self_, sel, output, rep, conn);
+                } @catch (...) {
+                    if (sb) ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
+                        capturedIMP)(self_, sel, output, sb, conn);
+                }
                 CFRelease(rep);
             } else {
-                ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
+                if (sb) ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
                     capturedIMP)(self_, sel, output, sb, conn);
             }
             CFRelease(fmt);
         } else {
-            ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
+            if (sb) ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
                 capturedIMP)(self_, sel, output, sb, conn);
         }
         CVPixelBufferRelease(src);
@@ -85,12 +92,15 @@ static void _webrtc_hookClass(Class cls) {
             if (m2) capturedIMP = method_getImplementation(m2);
         }
     }
-    NSLog(@"[MPU/WebRTC] Hooked: %@", NSStringFromClass(cls));
+
+    @synchronized(_webrtc_hooked) {
+        [_webrtc_hooked addObject:name];
+    }
+    NSLog(@"[MPU/WebRTC] Hooked: %@", name);
 }
 
-// Перебираем все классы в памяти и ищем те что реализуют
-// captureOutput:didOutputSampleBuffer:fromConnection:
-static void _webrtc_hookAllVideoCaptureDelegates(void) {
+// Сканируем все классы в памяти
+static void _webrtc_scanAllClasses(void) {
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
@@ -98,40 +108,39 @@ static void _webrtc_hookAllVideoCaptureDelegates(void) {
 
     for (unsigned int i = 0; i < count; i++) {
         Class cls = classes[i];
-        // Ищем только классы с нужным методом
-        Method m = class_getInstanceMethod(cls, sel);
-        if (!m) continue;
-
+        if (!class_getInstanceMethod(cls, sel)) continue;
         NSString *name = NSStringFromClass(cls);
-        // Пропускаем системные и уже хукнутые
-        if ([name hasPrefix:@"NS"] || [name hasPrefix:@"UI"] ||
-            [name hasPrefix:@"CA"] || [name hasPrefix:@"_"]) continue;
-
+        if (!name) continue;
+        // Пропускаем только явно системные
+        if ([name hasPrefix:@"_"]) continue;
         _webrtc_hookClass(cls);
     }
     free(classes);
+    NSLog(@"[MPU/WebRTC] Scan done, hooked %lu classes", (unsigned long)_webrtc_hooked.count);
 }
-
-// ── HOOK AVCaptureVideoDataOutput setSampleBufferDelegate ────────────────────
-// Дополнительно перехватываем через setSampleBufferDelegate
-// чтобы поймать WebKit классы которые регистрируются динамически
 
 %hook AVCaptureVideoDataOutput
 
 - (void)setSampleBufferDelegate:(id)delegate queue:(dispatch_queue_t)queue {
     %orig;
     if (!_enabled || !delegate) return;
-
     Class cls = object_getClass(delegate);
-    if (!cls) return;
+    if (cls) _webrtc_hookClass(cls);
+}
 
-    NSString *name = NSStringFromClass(cls);
-    // Хукаем WebKit и WK классы — они нужны для Safari/Chrome WebRTC
-    if ([name hasPrefix:@"WK"] || [name hasPrefix:@"WebKit"] ||
-        [name containsString:@"Video"] || [name containsString:@"Camera"] ||
-        [name containsString:@"Capture"] || [name containsString:@"RTC"]) {
-        _webrtc_hookClass(cls);
-    }
+%end
+
+%hook AVCaptureSession
+
+- (void)startRunning {
+    %orig;
+    if (!_enabled) return;
+    // При старте сессии сканируем классы — к этому моменту
+    // WebRTC классы уже загружены в память
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+        _webrtc_scanAllClasses();
+    });
 }
 
 %end
@@ -141,27 +150,17 @@ static void _webrtc_hookAllVideoCaptureDelegates(void) {
         NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
-
-        // Грузим только в Safari, Chrome и WebKit процессы
-        BOOL isSafari = [bid isEqualToString:@"com.apple.mobilesafari"];
-        BOOL isChrome = [bid isEqualToString:@"com.google.chrome.ios"];
-        BOOL isWebKit = [bid hasPrefix:@"com.apple.WebKit"] ||
-                        [bid hasPrefix:@"com.apple.webkit"];
-
-        if (!isSafari && !isChrome && !isWebKit) return;
         if ([path hasPrefix:@"/usr/"] || [path hasPrefix:@"/System/"]) return;
 
-        NSLog(@"[MPU/WebRTC] Loading for %@", bid);
+        _webrtc_hooked = [NSMutableSet new];
 
         %init;
+        NSLog(@"[MPU/WebRTC] Loaded for %@", bid);
 
-        // Хукаем все существующие классы с небольшой задержкой
-        // чтобы WebKit успел загрузить свои классы
+        // Первичный скан через 1 секунду после старта
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            if (_enabled) {
-                _webrtc_hookAllVideoCaptureDelegates();
-            }
+            if (_enabled) _webrtc_scanAllClasses();
         });
     }
 }
