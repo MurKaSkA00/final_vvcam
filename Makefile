@@ -15,8 +15,6 @@ MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo QuartzCor
 CoreGraphics CoreImage Foundation ImageIO IOSurface \
 MobileCoreServices VideoToolbox Security
 
-MediaPlaybackUtils_INSTALL_TARGET_PROCESSES = SpringBoard
-
 SUBPROJECTS += prefs
 
 include $(THEOS_MAKE_PATH)/tweak.mk
