@@ -26,7 +26,6 @@ static NSArray<NSString *> *_jb_targetBundles(void) {
     dispatch_once(&once, ^{
         list = @[
             @"com.paypal.PPClient",
-            @"ph.telegra.Telegraph",
             @"com.burbn.instagram",
             @"com.snapchat.snapchat",
             @"com.zhiliaoapp.musically",

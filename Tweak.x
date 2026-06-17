@@ -1,10 +1,11 @@
-// Tweak.x - MediaPlaybackUtils v1.5.0
+// Tweak.x - MediaPlaybackUtils v1.5.1
 // FIX 1: застывший кадр при переключении камеры (_lastBufferTime + сброс overlay)
 // FIX 2: фото сохраняется со стрима (правильный CGImage рендер с colorspace)
 // FIX 3: чёрный экран — CGImage fallback если IOSurface недоступен
 // FIX 4: краш при смене картинки — безопасный порядок NULL→Release для CVPixelBuffer
 // FIX 5: миниатюра фото берётся с реальной камеры — перехват previewPixelBuffer +
-//         fileDataRepresentationWithCustomizer: + отключение embedded thumbnail
+//        fileDataRepresentationWithCustomizer: + отключение embedded thumbnail
+// FIX 6: зависание при съёмке — CIContext рендер вынесен ЗА пределы @synchronized
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -16,15 +17,17 @@
 
 #define MPU_PREFS_ID CFSTR("com.proximacore.mediaplaybackutils")
 
-static BOOL              _enabled          = YES;
-static NSString         *_url              = @"http://192.168.1.44:8888/live/stream/index.m3u8";
-static _MPUMediaBufferAdapter *_reader     = nil;
-static CVPixelBufferRef  _lastBuffer       = NULL;
-static CFTimeInterval    _lastBufferTime   = 0;
-static id                _v_lock           = nil;
-static CIContext        *_v_ciContext      = nil;
-static NSString         *_currentStreamURL = nil;
-static BOOL              _isSwitching      = NO;
+// Не static — экспортируются для WebRTCHooks.x, AntifraudHooks.x, StealthHooks.x
+BOOL _enabled = YES;
+CVPixelBufferRef _lastBuffer = NULL;
+id _v_lock = nil;
+
+static NSString *_url = @"http://192.168.1.44:8888/live/stream/index.m3u8";
+static _MPUMediaBufferAdapter *_reader = nil;
+static CFTimeInterval _lastBufferTime = 0;
+static CIContext *_v_ciContext = nil;
+static NSString *_currentStreamURL = nil;
+static BOOL _isSwitching = NO;
 
 static void _v_loadPrefs(void) {
     CFPreferencesAppSynchronize(MPU_PREFS_ID);
@@ -50,9 +53,6 @@ static void _v_restartStreamIfNeeded(void) {
             _isSwitching = YES;
             [_reader stopStreaming];
             _reader = nil;
-            // FIX быстрая смена: НЕ сбрасываем _lastBuffer и _lastBufferTime —
-            // overlay будет держать последний кадр пока не придёт первый кадр
-            // из нового стрима, это убирает чёрный экран при переключении
             _currentStreamURL = nil;
         }
         if (!_reader && _enabled) {
@@ -63,8 +63,7 @@ static void _v_restartStreamIfNeeded(void) {
             _reader.pixelBufferCallback = ^(CVPixelBufferRef buffer) {
                 if (!buffer) return;
                 @synchronized(_v_lock) {
-                    // FIX 4: сначала Retain новый, потом Release старый —
-                    // чтобы не было окна где _lastBuffer указывает на мусор
+                    // FIX 4: сначала Retain новый, потом Release старый
                     CVPixelBufferRef newBuffer = CVPixelBufferRetain(buffer);
                     CVPixelBufferRef oldBuffer = _lastBuffer;
                     _lastBuffer = newBuffer;
@@ -115,6 +114,41 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
     return (s == noErr) ? out : NULL;
 }
 
+// ── FIX 6: рендер JPEG вынесен ЗА пределы @synchronized ─────────────────────
+// Сначала retain буфер (быстро, внутри лока), потом рендерим снаружи.
+// Это устраняет зависание: CIContext и JPEG компрессия больше не держат мьютекс.
+static NSData *_v_jpegFromCurrentBuffer(void) {
+    // Шаг 1: быстро захватить буфер под локом
+    CVPixelBufferRef buf = NULL;
+    @synchronized(_v_lock) {
+        if (_lastBuffer) buf = CVPixelBufferRetain(_lastBuffer);
+    }
+    if (!buf) return nil;
+
+    // Шаг 2: тяжёлые операции — ВНЕ лока
+    if (!_v_ciContext) {
+        CVPixelBufferRelease(buf);
+        return nil;
+    }
+
+    CIImage *ci = [CIImage imageWithCVPixelBuffer:buf];
+    CVPixelBufferRelease(buf); // освобождаем как только CIImage создан
+
+    if (!ci) return nil;
+
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGImageRef cg = [_v_ciContext createCGImage:ci
+                                       fromRect:ci.extent
+                                         format:kCIFormatBGRA8
+                                     colorSpace:cs];
+    CGColorSpaceRelease(cs);
+    if (!cg) return nil;
+
+    NSData *d = UIImageJPEGRepresentation([UIImage imageWithCGImage:cg], 0.92);
+    CGImageRelease(cg);
+    return d;
+}
+
 // ── 1. ПЕРЕХВАТ ДЕЛЕГАТА ──────────────────────────────────────────────────────
 
 %hook AVCaptureVideoDataOutput
@@ -130,11 +164,9 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
 
     Class cls = object_getClass(delegate);
     if (!cls) { %orig; return; }
-    NSString *clsName = NSStringFromClass(cls);
 
-    if ([clsName hasPrefix:@"RCT"]   || [clsName hasPrefix:@"WK"] ||
-        [clsName hasPrefix:@"WebKit"]||
-        [clsName hasPrefix:@"_"]) { %orig; return; }
+    NSString *clsName = NSStringFromClass(cls);
+    if ([clsName hasPrefix:@"_"]) { %orig; return; }
 
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
 
@@ -154,14 +186,14 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
                         CMSampleBufferRef use = rep ? rep : sb;
                         if (use)
                             ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
-                                capturedIMP)(self_, sel, output, use, conn);
+                             capturedIMP)(self_, sel, output, use, conn);
                         if (rep) CFRelease(rep);
                     } @catch (NSException *ex) {
                         NSLog(@"[MPU] hook exception %@: %@", clsName, ex.reason);
                         @try {
                             if (sb)
                                 ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
-                                    capturedIMP)(self_, sel, output, sb, conn);
+                                 capturedIMP)(self_, sel, output, sb, conn);
                         } @catch (...) {}
                     }
                 });
@@ -183,78 +215,51 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
 
 // ── 2. ПЕРЕХВАТ ФОТО ──────────────────────────────────────────────────────────
 
-// Вспомогательная функция — конвертирует _lastBuffer в JPEG NSData.
-// Вызывается внутри @synchronized(_v_lock), буфер уже проверен на != NULL.
-static NSData *_v_jpegFromLastBuffer(void) {
-    if (!_v_ciContext) return nil;
-    CIImage *ci = [CIImage imageWithCVPixelBuffer:_lastBuffer];
-    if (!ci) return nil;
-    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-    CGImageRef cg = [_v_ciContext createCGImage:ci
-                                       fromRect:ci.extent
-                                         format:kCIFormatBGRA8
-                                     colorSpace:cs];
-    CGColorSpaceRelease(cs);
-    if (!cg) return nil;
-    NSData *d = UIImageJPEGRepresentation([UIImage imageWithCGImage:cg], 0.92);
-    CGImageRelease(cg);
-    return d;
-}
-
 %hook AVCapturePhoto
 
-// Основной пиксельный буфер фото
+// FIX 6: retain буфера внутри лока, возврат снаружи
 - (CVPixelBufferRef)pixelBuffer {
+    CVPixelBufferRef buf = NULL;
     @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer)
-            return (CVPixelBufferRef)CFAutorelease(CVPixelBufferRetain(_lastBuffer));
+        if (_enabled && _lastBuffer) buf = CVPixelBufferRetain(_lastBuffer);
     }
+    if (buf) return (CVPixelBufferRef)CFAutorelease(buf);
     return %orig;
 }
 
-// FIX 5: миниатюра внизу экрана — тоже берётся с реальной камеры через этот метод
+// FIX 5 + FIX 6: миниатюра тоже из стрима, без удержания лока
 - (CVPixelBufferRef)previewPixelBuffer {
+    CVPixelBufferRef buf = NULL;
     @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer)
-            return (CVPixelBufferRef)CFAutorelease(CVPixelBufferRetain(_lastBuffer));
+        if (_enabled && _lastBuffer) buf = CVPixelBufferRetain(_lastBuffer);
     }
+    if (buf) return (CVPixelBufferRef)CFAutorelease(buf);
     return %orig;
 }
 
-// Данные файла при сохранении (стандартный путь)
+// FIX 6: рендер полностью вне лока — устраняет зависание при съёмке
 - (NSData *)fileDataRepresentation {
-    @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer) {
-            NSData *d = _v_jpegFromLastBuffer();
-            if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentation)"); return d; }
-        }
-    }
+    if (!_enabled) return %orig;
+    NSData *d = _v_jpegFromCurrentBuffer();
+    if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentation)"); return d; }
     return %orig;
 }
 
-// FIX 5: iOS 16+ — некоторые приложения вызывают именно этот метод
+// FIX 5 + FIX 6: iOS 16+
 - (NSData *)fileDataRepresentationWithCustomizer:(id)customizer {
-    @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer) {
-            NSData *d = _v_jpegFromLastBuffer();
-            if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentationWithCustomizer)"); return d; }
-        }
-    }
+    if (!_enabled) return %orig;
+    NSData *d = _v_jpegFromCurrentBuffer();
+    if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentationWithCustomizer)"); return d; }
     return %orig;
 }
 
 %end
 
 // ── 2.5. ОТКЛЮЧЕНИЕ EMBEDDED THUMBNAIL ───────────────────────────────────────
-// FIX 5: если приложение запрашивает embedded thumbnail в настройках съёмки,
-// он генерируется из реального потока камеры ещё до того как AVCapturePhoto
-// доходит до наших хуков. Убираем thumbnail из настроек — он всё равно не нужен
-// когда мы подменяем previewPixelBuffer.
 
 %hook AVCapturePhotoSettings
 
 - (void)setEmbeddedThumbnailPhotoFormat:(NSDictionary *)format {
-    // Не даём приложению включить thumbnail с реальной камеры
     if (_enabled) {
         %orig(nil);
         return;
@@ -269,7 +274,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
 - (void)capturePhotoWithSettings:(AVCapturePhotoSettings *)settings
                         delegate:(id)delegate {
     if (_enabled) {
-        // Принудительно сбрасываем embedded thumbnail перед съёмкой
         [settings setEmbeddedThumbnailPhotoFormat:nil];
     }
     %orig;
@@ -303,8 +307,7 @@ static NSData *_v_jpegFromLastBuffer(void) {
         objc_setAssociatedObject(self, "_v_displayLink", dl, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    // FIX мигание: только обновляем frame, НЕ сбрасываем contents —
-    // иначе каждый layoutSublayers вызывает мигание чёрным кадром
+    // FIX мигание: только обновляем frame, НЕ сбрасываем contents
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     overlay.frame = self.bounds;
@@ -320,8 +323,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
     if (!overlay) return;
 
     @synchronized(_v_lock) {
-        // FIX мигание: при переключении (_isSwitching) держим последний кадр
-        // а не показываем чёрный экран — так переход становится незаметным
         if (!_lastBuffer) {
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
@@ -331,8 +332,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
             return;
         }
 
-        // При активном переключении — игнорируем проверку на устаревание,
-        // держим последний кадр пока не придёт первый кадр нового стрима
         CFTimeInterval age = CACurrentMediaTime() - _lastBufferTime;
         if (!_isSwitching && _lastBufferTime > 0 && age > 2.0) {
             [CATransaction begin];
@@ -340,10 +339,9 @@ static NSData *_v_jpegFromLastBuffer(void) {
             overlay.contents = nil;
             overlay.backgroundColor = [UIColor blackColor].CGColor;
             [CATransaction commit];
-            // Сбрасываем буфер чтобы _v_restartStreamIfNeeded мог переподключиться
+
             if (!_isSwitching) {
                 _isSwitching = YES;
-                // FIX 4: сначала NULL, потом Release
                 CVPixelBufferRef toRelease = _lastBuffer;
                 _lastBuffer = NULL;
                 _lastBufferTime = 0;
@@ -362,9 +360,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
             return;
         }
 
-        // Есть буфер — показываем его всегда (даже старый)
-        // Это позволяет держать последний кадр при переключении сцены в OBS
-
         // Быстрый путь — IOSurface
         IOSurfaceRef surf = CVPixelBufferGetIOSurface(_lastBuffer);
         if (surf) {
@@ -377,8 +372,14 @@ static NSData *_v_jpegFromLastBuffer(void) {
         }
 
         // Fallback — CGImage (для форматов без IOSurface)
-        CIImage *ci = [CIImage imageWithCVPixelBuffer:_lastBuffer];
-        if (ci && _v_ciContext) {
+        // FIX 6: retain буфер перед выходом из лока, рендерим снаружи
+        CVPixelBufferRef buf = CVPixelBufferRetain(_lastBuffer);
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!_v_ciContext) { CVPixelBufferRelease(buf); return; }
+            CIImage *ci = [CIImage imageWithCVPixelBuffer:buf];
+            CVPixelBufferRelease(buf);
+            if (!ci) return;
             CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
             CGImageRef cg = [_v_ciContext createCGImage:ci
                                                fromRect:ci.extent
@@ -393,23 +394,19 @@ static NSData *_v_jpegFromLastBuffer(void) {
                 [CATransaction commit];
                 CGImageRelease(cg);
             }
-        }
+        });
     }
 }
 
 %end
 
-// ── 3.5. ПЕРЕХВАТ СЕССИИ (для сторонних приложений) ──────────────────────────
-// Некоторые сторонние камера-приложения регистрируют делегат ДО того как
-// setSampleBufferDelegate успевает сработать. Хук на startRunning гарантирует
-// что стрим запущен к моменту первого кадра.
+// ── 3.5. ПЕРЕХВАТ СЕССИИ ─────────────────────────────────────────────────────
 
 %hook AVCaptureSession
 
 - (void)startRunning {
     if (_enabled) {
         _v_init();
-        // Принудительно ре-свиззлим все outputs этой сессии
         NSArray *outputs = [self outputs];
         for (AVCaptureOutput *output in outputs) {
             if ([output isKindOfClass:[AVCaptureVideoDataOutput class]]) {
@@ -417,7 +414,6 @@ static NSData *_v_jpegFromLastBuffer(void) {
                 id delegate = vdo.sampleBufferDelegate;
                 dispatch_queue_t queue = vdo.sampleBufferCallbackQueue;
                 if (delegate && queue) {
-                    // Переустанавливаем делегат — это прогонит его через наш хук
                     [vdo setSampleBufferDelegate:delegate queue:queue];
                 }
             }
@@ -450,20 +446,19 @@ static NSData *_v_jpegFromLastBuffer(void) {
 
 %ctor {
     @autoreleasepool {
-        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
-        if ([bid hasPrefix:@"com.apple.springboard"])   return;
-        if ([bid hasPrefix:@"com.apple.WebKit"])         return;
-        if ([bid hasPrefix:@"com.apple.mediaserverd"])   return;
-        if ([bid hasPrefix:@"com.apple.assetsd"])        return;
-        if ([bid hasPrefix:@"com.apple.coremedia"])      return;
-        if ([bid hasPrefix:@"com.apple.avconferenced"])  return;
+        if ([bid hasPrefix:@"com.apple.springboard"]) return;
+        if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
+        if ([bid hasPrefix:@"com.apple.assetsd"]) return;
+        if ([bid hasPrefix:@"com.apple.coremedia"]) return;
+        if ([bid hasPrefix:@"com.apple.avconferenced"]) return;
         if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
-        if ([path hasPrefix:@"/usr/"])                   return;
-        if ([path hasPrefix:@"/System/Library/"])        return;
+        if ([path hasPrefix:@"/usr/"]) return;
+        if ([path hasPrefix:@"/System/Library/"]) return;
 
-        _v_lock     = [NSObject new];
+        _v_lock = [NSObject new];
         _v_ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer: @NO}];
         _v_loadPrefs();
 
@@ -473,7 +468,7 @@ static NSData *_v_jpegFromLastBuffer(void) {
             NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
 
         if (_enabled) {
-            NSLog(@"[MPU] Loaded: %@  url=%@", bid, _url);
+            NSLog(@"[MPU] Loaded: %@ url=%@", bid, _url);
             %init;
         }
     }

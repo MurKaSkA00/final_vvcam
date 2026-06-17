@@ -6,20 +6,103 @@
     <dict>
         <key>Bundles</key>
         <array>
+            <!-- Камера -->
             <string>com.apple.camera</string>
-            <string>com.apple.facetime</string>
+
+            <!-- Браузеры — основные процессы -->
+            <string>com.apple.mobilesafari</string>
+            <string>com.apple.SafariViewService</string>
+            <string>com.apple.WebKit.WebContent</string>
+            <string>com.apple.WebKit.Networking</string>
+            <string>com.google.chrome.ios</string>
+            <string>com.google.chrome.ios.SafariViewService</string>
+            <string>com.brave.ios.browser</string>
+            <string>com.brave.ios.browser.SafariViewService</string>
+            <string>com.opera.Opera</string>
+            <string>com.firefox.ios</string>
+            <string>org.mozilla.ios.Firefox</string>
+            <string>com.microsoft.msedge</string>
+            <string>com.ddg.ios</string>
+            <string>com.kagi.kagimacOS</string>
+
+            <!-- Мессенджеры -->
             <string>ph.telegra.Telegraph</string>
-            <string>com.snapchat.snapchat</string>
-            <string>com.burbn.instagram</string>
-            <string>com.zhiliaoapp.musically</string>
-            <string>com.google.ios.youtube</string>
-            <string>com.atebits.Tweetie2</string>
-            <string>com.facebook.Facebook</string>
-            <string>com.paypal.PPClient</string>
-            <string>com.ubercab.UberClient</string>
+            <string>com.whatsapp.WhatsApp</string>
+            <string>net.whatsapp.WhatsApp</string>
+            <string>com.facebook.Messenger</string>
             <string>com.skype.skype</string>
-            <string>us.zoom.videomeetings</string>
+            <string>com.viber.viber</string>
+            <string>com.discord.Discord</string>
+            <string>com.google.Hangouts</string>
             <string>com.microsoft.teams</string>
+
+            <!-- Видеозвонки -->
+            <string>com.apple.facetime</string>
+            <string>us.zoom.videomeetings</string>
+            <string>com.google.meet</string>
+            <string>com.microsoft.skype.SkypeForBusiness</string>
+            <string>com.cisco.webex.meetings</string>
+            <string>com.ringcentral.mobile</string>
+            <string>com.vonage.businessmobile</string>
+
+            <!-- Соцсети -->
+            <string>com.instagram.Instagram</string>
+            <string>com.facebook.Facebook</string>
+            <string>com.zhiliaoapp.musically</string>
+            <string>com.snapchat.snapchat</string>
+            <string>com.twitter.twitter-iphone</string>
+            <string>com.pinterest.Pinterest</string>
+            <string>com.reddit.Reddit</string>
+            <string>com.linkedin.LinkedIn</string>
+            <string>com.tumblr.tumblr</string>
+            <string>com.bereal.BeReal</string>
+            <string>com.locket.widget</string>
+
+            <!-- Стриминг -->
+            <string>tv.twitch.stream</string>
+            <string>com.google.ios.youtube</string>
+            <string>com.hamliveinc.uplive</string>
+            <string>com.kick.Kick</string>
+
+            <!-- Знакомства -->
+            <string>com.cardify.tinder</string>
+            <string>com.bumble.app</string>
+            <string>com.hingeapp.hinge</string>
+            <string>com.grindr.mj</string>
+            <string>com.match.match</string>
+            <string>com.okcupid.okcupid</string>
+
+            <!-- Банки и финансы -->
+            <string>com.paypal.www</string>
+            <string>com.venmo.Venmo</string>
+            <string>com.cashapp.squarecash</string>
+            <string>com.konylabs.westernunion</string>
+            <string>com.chase.sig.ios</string>
+            <string>com.bankofamerica.BofAMobileBanking</string>
+            <string>com.wellsfargo.wellsfargomobile</string>
+            <string>com.key.KeyBank</string>
+
+            <!-- Документы и сканеры -->
+            <string>com.adobe.scan.ios</string>
+            <string>com.microsoft.Office.Lens</string>
+            <string>com.apple.Notes</string>
+            <string>com.readdle.scanner</string>
+            <string>net.doo.DMobile</string>
+
+            <!-- Покупки -->
+            <string>com.amazon.Amazon</string>
+            <string>com.ebay.iphone.shopping</string>
+            <string>com.google.GoogleLens</string>
+            <string>com.poshmark.poshmark</string>
+            <string>com.offerup.offerup</string>
+
+            <!-- Прочее -->
+            <string>com.google.Gmail</string>
+            <string>com.microsoft.Office.Outlook</string>
+            <string>com.apple.mobilemail</string>
+            <string>com.duolingo.duolingo</string>
+            <string>com.ubercab.UberClient</string>
+            <string>com.lyft.ios</string>
         </array>
     </dict>
 </dict>

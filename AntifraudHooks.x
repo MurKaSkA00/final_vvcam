@@ -1,55 +1,43 @@
-// AntifraudHooks.x - MediaPlaybackUtils v1.5.1
-// Скрывает виртуальную камеру от приложений.
-// ИСПРАВЛЕНИЕ v1.5.1: dispatch_async предотвращает краши при старте.
+// AntifraudHooks.x - MediaPlaybackUtils v2.0.1
+// Полная маскировка подмены камеры
+// FIX: убраны хуки AVCaptureSession/isRunning и AVCaptureConnection/isActive —
+//      они блокировали capturePhoto: и вызывали зависание при съёмке
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <QuartzCore/QuartzCore.h>
 #import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
+#import <ImageIO/ImageIO.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <substrate.h>
 
+extern CVPixelBufferRef _lastBuffer;
+extern id _v_lock;
+extern BOOL _enabled;
+
+// ── NSStringFromClass — скрываем _MPU суффикс ────────────────────────────────
+
 static NSString *(*orig_NSStringFromClass)(Class) = NULL;
+
 static NSString *hook_NSStringFromClass(Class cls) {
     NSString *r = orig_NSStringFromClass(cls);
     if (!r) return r;
-    if ([r hasSuffix:@"_MPU"]) {
-        return [r substringToIndex:r.length - 4];
-    }
+    if ([r hasSuffix:@"_MPU"]) return [r substringToIndex:r.length - 4];
     return r;
 }
 
-// ── OVERLAY: убираем из sublayers для внешних инспекторов ────────────────────
-
-%hook AVCaptureVideoPreviewLayer
-
-- (NSArray<CALayer *> *)sublayers {
-    NSArray<CALayer *> *orig = %orig;
-    if (!orig) return orig;
-    NSMutableArray *clean = [orig mutableCopy];
-    NSMutableArray *toRemove = [NSMutableArray array];
-    for (CALayer *layer in clean) {
-        if (layer.zPosition == 999999) {
-            [toRemove addObject:layer];
-        }
-    }
-    [clean removeObjectsInArray:toRemove];
-    return clean;
-}
-
-%end
-
-// ── СКРЫТИЕ МЕТАДАННЫХ УСТРОЙСТВА ────────────────────────────────────────────
+// ── AVCaptureDevice — скрываем метаданные ────────────────────────────────────
 
 %hook AVCaptureDevice
 
 - (NSString *)localizedName {
     NSString *name = %orig;
     if (!name) return name;
-    if ([name containsString:@"MPU"]     || [name containsString:@"Virtual"] ||
-        [name containsString:@"Stream"]  || [name containsString:@"Tweak"]   ||
+    if ([name containsString:@"MPU"] || [name containsString:@"Virtual"] ||
+        [name containsString:@"Stream"] || [name containsString:@"Tweak"] ||
         [name containsString:@"Proxima"] || [name containsString:@"Media"]) {
         return @"Back Camera";
     }
@@ -67,9 +55,7 @@ static NSString *hook_NSStringFromClass(Class cls) {
 
 - (AVCaptureDevicePosition)position {
     AVCaptureDevicePosition p = %orig;
-    if (p == AVCaptureDevicePositionUnspecified) {
-        return AVCaptureDevicePositionBack;
-    }
+    if (p == AVCaptureDevicePositionUnspecified) return AVCaptureDevicePositionBack;
     return p;
 }
 
@@ -82,46 +68,137 @@ static NSString *hook_NSStringFromClass(Class cls) {
     return t;
 }
 
+- (BOOL)isFocusPointOfInterestSupported { return YES; }
+- (BOOL)isExposurePointOfInterestSupported { return YES; }
+- (BOOL)isFlashAvailable { return YES; }
+- (BOOL)isTorchAvailable { return YES; }
+
+- (BOOL)hasMediaType:(AVMediaType)mediaType {
+    if ([mediaType isEqualToString:AVMediaTypeVideo]) return YES;
+    return %orig;
+}
+
 %end
 
-// ── СОЕДИНЕНИЕ: говорим что всё активно ──────────────────────────────────────
+// ── AVCaptureConnection ───────────────────────────────────────────────────────
+// FIX: isEnabled и isActive намеренно НЕ хукаем.
+//      capturePhoto: проверяет isActive у connection перед захватом кадра.
+//      Принудительный return YES при реально неактивном connection → зависание.
 
 %hook AVCaptureConnection
 
-- (BOOL)isEnabled {
-    return YES;
-}
+- (BOOL)isVideoMirroringSupported { return YES; }
+- (BOOL)isVideoOrientationSupported { return YES; }
 
-- (BOOL)isActive {
-    return YES;
+%end
+
+// ── AVCaptureSession ──────────────────────────────────────────────────────────
+// FIX: isRunning и isInterrupted намеренно НЕ хукаем.
+//      capturePhoto: ждёт реального перехода состояния сессии через KVO/notifications.
+//      Подмена значений → бесконечное ожидание → зависание приложения.
+
+// ── AVCaptureDeviceFormat ─────────────────────────────────────────────────────
+
+%hook AVCaptureDeviceFormat
+
+- (CMVideoDimensions)highResolutionStillImageDimensions {
+    CMVideoDimensions d = %orig;
+    if (d.width == 0 || d.height == 0) {
+        d.width = 4032;
+        d.height = 3024;
+    }
+    return d;
 }
 
 %end
 
+// ── NSProcessInfo — скрываем среду выполнения ────────────────────────────────
+
+%hook NSProcessInfo
+
+- (NSDictionary<NSString *, NSString *> *)environment {
+    NSMutableDictionary *env = [%orig mutableCopy];
+    if (!env) return %orig;
+    [env removeObjectForKey:@"DYLD_INSERT_LIBRARIES"];
+    [env removeObjectForKey:@"_MSSafeMode"];
+    [env removeObjectForKey:@"_SafeMode"];
+    [env removeObjectForKey:@"SUBSTRATE_LIBRARY_PATH"];
+    [env removeObjectForKey:@"TWEAKLOADER_DISABLE"];
+    return env;
+}
+
+%end
+
+// ── UIDevice ──────────────────────────────────────────────────────────────────
+
+%hook UIDevice
+
+- (NSString *)model {
+    NSString *m = %orig;
+    if ([m containsString:@"Simulator"]) return @"iPhone";
+    return m;
+}
+
+%end
+
+// ── NSUserDefaults ────────────────────────────────────────────────────────────
+
+%hook NSUserDefaults
+
+- (id)objectForKey:(NSString *)key {
+    if (key && ([key containsString:@"MediaPlaybackUtils"] ||
+                [key containsString:@"proximacore"] ||
+                [key containsString:@"MPU"])) {
+        return nil;
+    }
+    return %orig;
+}
+
+%end
+
+// ── NSFileManager ─────────────────────────────────────────────────────────────
+
+%hook NSFileManager
+
+- (BOOL)fileExistsAtPath:(NSString *)path {
+    if (path && ([path containsString:@"MediaPlaybackUtils"] ||
+                 [path containsString:@"proximacore"])) {
+        return NO;
+    }
+    return %orig;
+}
+
+- (NSDictionary *)attributesOfItemAtPath:(NSString *)path error:(NSError **)error {
+    if (path && ([path containsString:@"MediaPlaybackUtils"] ||
+                 [path containsString:@"proximacore"])) {
+        if (error) *error = [NSError errorWithDomain:NSCocoaErrorDomain
+                                                code:NSFileNoSuchFileError
+                                            userInfo:nil];
+        return nil;
+    }
+    return %orig;
+}
+
+%end
+
+// ── ИНИЦИАЛИЗАЦИЯ ─────────────────────────────────────────────────────────────
+
 %ctor {
     @autoreleasepool {
-        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
-
-        if ([bid hasPrefix:@"com.apple."]) return;
-        if ([path hasPrefix:@"/usr/"])     return;
-        if ([path hasPrefix:@"/System/"])  return;
+        if ([bid hasPrefix:@"com.apple.springboard"]) return;
+        if ([path hasPrefix:@"/usr/"]) return;
+        if ([path hasPrefix:@"/System/"]) return;
         if ([bid hasPrefix:@"org.coolstar."]) return;
         if ([bid hasPrefix:@"com.tigisoftware."]) return;
         if ([bid hasPrefix:@"org.theos."]) return;
         if ([bid hasPrefix:@"science.xnu."]) return;
-        if ([bid isEqualToString:@"org.coolstar.sileo"]) return;
-        if ([bid isEqualToString:@"com.tigisoftware.Filza"]) return;
         if ([bid isEqualToString:@"xyz.willy.Zebra"]) return;
-        if ([bid hasPrefix:@"com.opa334.Trollstore"]) return;
-        if ([bid hasPrefix:@"com.opa334.trollstore"]) return;
+        if ([bid hasPrefix:@"com.opa334."]) return;
         if ([bid hasPrefix:@"com.palera1n"]) return;
-        if ([bid isEqualToString:@"com.google.chrome.ios"]) return;
 
-        // ИСПРАВЛЕНИЕ: хуки ставятся асинхронно после инициализации приложения.
-        // Предотвращает краши в Telegram, банковских и других приложениях
-        // которые делают integrity check при старте.
         dispatch_async(dispatch_get_main_queue(), ^{
             MSHookFunction((void *)NSStringFromClass,
                            (void *)hook_NSStringFromClass,
