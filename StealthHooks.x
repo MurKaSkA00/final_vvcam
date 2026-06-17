@@ -1,5 +1,7 @@
-// StealthHooks.x - MediaPlaybackUtils v2.0.0
+// StealthHooks.x - MediaPlaybackUtils v2.0.1
 // Полное скрытие твика из памяти процесса
+// FIX: _stealth_rebuild_filter больше не dispatch_once — фильтр пересобирается
+//      каждый раз, иначе образы загруженные после первого вызова не скрывались
 
 #import <Foundation/Foundation.h>
 #import <substrate.h>
@@ -44,7 +46,7 @@ static BOOL _stealth_should_hide_image(const char *name) {
     if (strstr(name, "libellekit"))         return YES;
     if (strstr(name, "Substitute"))         return YES;
     if (strstr(name, "TweakInject"))        return YES;
-    if (strstr(name, "ChOma"))              return YES;
+    if (strstr(name, "ChOma"))             return YES;
     if (strstr(name, "WebRTCHooks"))        return YES;
     if (strstr(name, "AntifraudHooks"))     return YES;
     if (strstr(name, "StealthHooks"))       return YES;
@@ -59,19 +61,21 @@ static const char *(*orig_dyld_get_image_name)(uint32_t);
 static const struct mach_header *(*orig_dyld_get_image_header)(uint32_t);
 static intptr_t (*orig_dyld_get_image_vmaddr_slide)(uint32_t);
 
-static uint32_t  _filtered_to_real[2048];
-static uint32_t  _filtered_count = 0;
+static uint32_t _filtered_to_real[2048];
+static uint32_t _filtered_count = 0;
+static OSSpinLock _filter_lock = OS_SPINLOCK_INIT;
 
+// FIX: пересобираем фильтр при каждом вызове — новые dylib (стрим, substrate)
+//      загружаются позже и dispatch_once их не захватывал
 static void _stealth_rebuild_filter(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        uint32_t real = orig_dyld_image_count();
-        _filtered_count = 0;
-        for (uint32_t i = 0; i < real && _filtered_count < 2048; i++) {
-            if (!_stealth_should_hide_image(orig_dyld_get_image_name(i)))
-                _filtered_to_real[_filtered_count++] = i;
-        }
-    });
+    OSSpinLockLock(&_filter_lock);
+    uint32_t real = orig_dyld_image_count();
+    _filtered_count = 0;
+    for (uint32_t i = 0; i < real && _filtered_count < 2048; i++) {
+        if (!_stealth_should_hide_image(orig_dyld_get_image_name(i)))
+            _filtered_to_real[_filtered_count++] = i;
+    }
+    OSSpinLockUnlock(&_filter_lock);
 }
 
 static uint32_t hook_dyld_image_count(void) {
@@ -83,27 +87,37 @@ static uint32_t hook_dyld_image_count(void) {
 static const char *hook_dyld_get_image_name(uint32_t idx) {
     if (_stealth_is_trusted()) return orig_dyld_get_image_name(idx);
     _stealth_rebuild_filter();
-    if (idx >= _filtered_count) return NULL;
-    return orig_dyld_get_image_name(_filtered_to_real[idx]);
+    OSSpinLockLock(&_filter_lock);
+    uint32_t real_idx = (idx < _filtered_count) ? _filtered_to_real[idx] : UINT32_MAX;
+    OSSpinLockUnlock(&_filter_lock);
+    if (real_idx == UINT32_MAX) return NULL;
+    return orig_dyld_get_image_name(real_idx);
 }
 
 static const struct mach_header *hook_dyld_get_image_header(uint32_t idx) {
     if (_stealth_is_trusted()) return orig_dyld_get_image_header(idx);
     _stealth_rebuild_filter();
-    if (idx >= _filtered_count) return NULL;
-    return orig_dyld_get_image_header(_filtered_to_real[idx]);
+    OSSpinLockLock(&_filter_lock);
+    uint32_t real_idx = (idx < _filtered_count) ? _filtered_to_real[idx] : UINT32_MAX;
+    OSSpinLockUnlock(&_filter_lock);
+    if (real_idx == UINT32_MAX) return NULL;
+    return orig_dyld_get_image_header(real_idx);
 }
 
 static intptr_t hook_dyld_get_image_vmaddr_slide(uint32_t idx) {
     if (_stealth_is_trusted()) return orig_dyld_get_image_vmaddr_slide(idx);
     _stealth_rebuild_filter();
-    if (idx >= _filtered_count) return 0;
-    return orig_dyld_get_image_vmaddr_slide(_filtered_to_real[idx]);
+    OSSpinLockLock(&_filter_lock);
+    uint32_t real_idx = (idx < _filtered_count) ? _filtered_to_real[idx] : UINT32_MAX;
+    OSSpinLockUnlock(&_filter_lock);
+    if (real_idx == UINT32_MAX) return 0;
+    return orig_dyld_get_image_vmaddr_slide(real_idx);
 }
 
 // ── dladdr — скрываем адреса наших функций ───────────────────────────────────
 
 static int (*orig_dladdr)(const void *, Dl_info *);
+
 static int hook_dladdr(const void *addr, Dl_info *info) {
     int r = orig_dladdr(addr, info);
     if (_stealth_is_trusted()) return r;
@@ -120,8 +134,8 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
 %hook NSString
 
 + (instancetype)stringWithContentsOfFile:(NSString *)path
-                                 encoding:(NSStringEncoding)enc
-                                    error:(NSError **)err {
+                                encoding:(NSStringEncoding)enc
+                                   error:(NSError **)err {
     if (!_stealth_is_trusted() && path) {
         if ([path containsString:@"MediaPlaybackUtils"] ||
             [path containsString:@"proximacore"] ||
@@ -216,15 +230,14 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
         NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
-
         if ([bid hasPrefix:@"com.apple."]) return;
-        if ([path hasPrefix:@"/usr/"])     return;
-        if ([path hasPrefix:@"/System/"])  return;
+        if ([path hasPrefix:@"/usr/"]) return;
+        if ([path hasPrefix:@"/System/"]) return;
         if ([bid isEqualToString:@"org.coolstar.SileoStore"]) return;
-        if ([bid isEqualToString:@"com.tigisoftware.Filza"])   return;
-        if ([bid isEqualToString:@"xyz.willy.Zebra"])          return;
-        if ([bid hasPrefix:@"com.opa334.TrollStore"])          return;
-        if ([bid hasPrefix:@"com.palera1n"])                   return;
+        if ([bid isEqualToString:@"com.tigisoftware.Filza"]) return;
+        if ([bid isEqualToString:@"xyz.willy.Zebra"]) return;
+        if ([bid hasPrefix:@"com.opa334.TrollStore"]) return;
+        if ([bid hasPrefix:@"com.palera1n"]) return;
 
         dispatch_async(dispatch_get_main_queue(), ^{
             MSHookFunction((void *)_dyld_image_count,
