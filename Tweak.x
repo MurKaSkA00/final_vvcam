@@ -166,7 +166,13 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
     if (!cls) { %orig; return; }
 
     NSString *clsName = NSStringFromClass(cls);
+<<<<<<< HEAD
     if ([clsName hasPrefix:@"_"]) { %orig; return; }
+=======
+    if ([clsName hasPrefix:@"RCT"] || [clsName hasPrefix:@"WK"] ||
+        [clsName hasPrefix:@"WebKit"] ||
+        [clsName hasPrefix:@"_"]) { %orig; return; }
+>>>>>>> 1110ea636266ecba637513ec5bf9eb6919f0ec44
 
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
 
@@ -450,6 +456,10 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
+<<<<<<< HEAD
+=======
+        if ([bid hasPrefix:@"com.apple.WebKit"]) return;
+>>>>>>> 1110ea636266ecba637513ec5bf9eb6919f0ec44
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
         if ([bid hasPrefix:@"com.apple.coremedia"]) return;

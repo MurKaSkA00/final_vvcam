@@ -9,6 +9,7 @@
             <!-- Камера -->
             <string>com.apple.camera</string>
 
+<<<<<<< HEAD
             <!-- Браузеры — основные процессы -->
             <string>com.apple.mobilesafari</string>
             <string>com.apple.SafariViewService</string>
@@ -24,6 +25,13 @@
             <string>com.microsoft.msedge</string>
             <string>com.ddg.ios</string>
             <string>com.kagi.kagimacOS</string>
+=======
+            <!-- Браузеры — WebRTC -->
+            <string>com.apple.mobilesafari</string>
+            <string>com.apple.SafariViewService</string>
+            <string>com.google.chrome.ios</string>
+            <string>com.google.chrome.ios.SafariViewService</string>
+>>>>>>> 1110ea636266ecba637513ec5bf9eb6919f0ec44
 
             <!-- Мессенджеры -->
             <string>ph.telegra.Telegraph</string>
