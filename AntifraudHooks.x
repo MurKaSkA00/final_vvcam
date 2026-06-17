@@ -1,5 +1,7 @@
-// AntifraudHooks.x - MediaPlaybackUtils v2.0.0
+// AntifraudHooks.x - MediaPlaybackUtils v2.0.1
 // Полная маскировка подмены камеры
+// FIX: убраны хуки AVCaptureSession/isRunning и AVCaptureConnection/isActive —
+//      они блокировали capturePhoto: и вызывали зависание при съёмке
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -13,12 +15,13 @@
 #import <substrate.h>
 
 extern CVPixelBufferRef _lastBuffer;
-extern id               _v_lock;
-extern BOOL             _enabled;
+extern id _v_lock;
+extern BOOL _enabled;
 
 // ── NSStringFromClass — скрываем _MPU суффикс ────────────────────────────────
 
 static NSString *(*orig_NSStringFromClass)(Class) = NULL;
+
 static NSString *hook_NSStringFromClass(Class cls) {
     NSString *r = orig_NSStringFromClass(cls);
     if (!r) return r;
@@ -33,8 +36,8 @@ static NSString *hook_NSStringFromClass(Class cls) {
 - (NSString *)localizedName {
     NSString *name = %orig;
     if (!name) return name;
-    if ([name containsString:@"MPU"]     || [name containsString:@"Virtual"] ||
-        [name containsString:@"Stream"]  || [name containsString:@"Tweak"]   ||
+    if ([name containsString:@"MPU"] || [name containsString:@"Virtual"] ||
+        [name containsString:@"Stream"] || [name containsString:@"Tweak"] ||
         [name containsString:@"Proxima"] || [name containsString:@"Media"]) {
         return @"Back Camera";
     }
@@ -65,11 +68,11 @@ static NSString *hook_NSStringFromClass(Class cls) {
     return t;
 }
 
-// Скрываем что устройство не поддерживает фокус/экспозицию как реальная камера
 - (BOOL)isFocusPointOfInterestSupported { return YES; }
 - (BOOL)isExposurePointOfInterestSupported { return YES; }
 - (BOOL)isFlashAvailable { return YES; }
 - (BOOL)isTorchAvailable { return YES; }
+
 - (BOOL)hasMediaType:(AVMediaType)mediaType {
     if ([mediaType isEqualToString:AVMediaTypeVideo]) return YES;
     return %orig;
@@ -78,52 +81,33 @@ static NSString *hook_NSStringFromClass(Class cls) {
 %end
 
 // ── AVCaptureConnection ───────────────────────────────────────────────────────
+// FIX: isEnabled и isActive намеренно НЕ хукаем.
+//      capturePhoto: проверяет isActive у connection перед захватом кадра.
+//      Принудительный return YES при реально неактивном connection → зависание.
 
 %hook AVCaptureConnection
 
-- (BOOL)isEnabled  { return YES; }
-- (BOOL)isActive   { return YES; }
 - (BOOL)isVideoMirroringSupported { return YES; }
 - (BOOL)isVideoOrientationSupported { return YES; }
 
 %end
 
-// ── AVCaptureSession — скрываем состояние ────────────────────────────────────
+// ── AVCaptureSession ──────────────────────────────────────────────────────────
+// FIX: isRunning и isInterrupted намеренно НЕ хукаем.
+//      capturePhoto: ждёт реального перехода состояния сессии через KVO/notifications.
+//      Подмена значений → бесконечное ожидание → зависание приложения.
 
-%hook AVCaptureSession
-
-- (BOOL)isRunning { return YES; }
-- (BOOL)isInterrupted { return NO; }
-
-%end
-
-// ── CMSampleBuffer — чистим attachments от следов подмены ────────────────────
-
-%hook AVCaptureVideoDataOutput
-
-- (void)setSampleBufferDelegate:(id)delegate queue:(dispatch_queue_t)queue {
-    %orig;
-}
-
-%end
-
-// ── CVPixelBuffer — подделываем метаданные размера ───────────────────────────
-// Некоторые приложения проверяют размер кадра и сравнивают с ожидаемым
+// ── AVCaptureDeviceFormat ─────────────────────────────────────────────────────
 
 %hook AVCaptureDeviceFormat
 
 - (CMVideoDimensions)highResolutionStillImageDimensions {
     CMVideoDimensions d = %orig;
-    // Если возвращает 0 — подставляем стандартный размер реальной камеры
     if (d.width == 0 || d.height == 0) {
         d.width = 4032;
         d.height = 3024;
     }
     return d;
-}
-
-- (CMVideoDimensions)highestSupportedFrameRateRange {
-    return %orig;
 }
 
 %end
@@ -135,7 +119,6 @@ static NSString *hook_NSStringFromClass(Class cls) {
 - (NSDictionary<NSString *, NSString *> *)environment {
     NSMutableDictionary *env = [%orig mutableCopy];
     if (!env) return %orig;
-    // Убираем переменные которые выдают твик
     [env removeObjectForKey:@"DYLD_INSERT_LIBRARIES"];
     [env removeObjectForKey:@"_MSSafeMode"];
     [env removeObjectForKey:@"_SafeMode"];
@@ -146,20 +129,19 @@ static NSString *hook_NSStringFromClass(Class cls) {
 
 %end
 
-// ── UIDevice — скрываем признаки джейла ──────────────────────────────────────
+// ── UIDevice ──────────────────────────────────────────────────────────────────
 
 %hook UIDevice
 
 - (NSString *)model {
     NSString *m = %orig;
-    // Некоторые fraud-системы проверяют модель устройства
     if ([m containsString:@"Simulator"]) return @"iPhone";
     return m;
 }
 
 %end
 
-// ── NSUserDefaults — блокируем чтение данных о твике ─────────────────────────
+// ── NSUserDefaults ────────────────────────────────────────────────────────────
 
 %hook NSUserDefaults
 
@@ -174,7 +156,7 @@ static NSString *hook_NSStringFromClass(Class cls) {
 
 %end
 
-// ── Скрываем файлы твика через NSFileManager ──────────────────────────────────
+// ── NSFileManager ─────────────────────────────────────────────────────────────
 
 %hook NSFileManager
 
@@ -203,20 +185,19 @@ static NSString *hook_NSStringFromClass(Class cls) {
 
 %ctor {
     @autoreleasepool {
-        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
-
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
-        if ([path hasPrefix:@"/usr/"])                return;
-        if ([path hasPrefix:@"/System/"])             return;
-        if ([bid hasPrefix:@"org.coolstar."])         return;
-        if ([bid hasPrefix:@"com.tigisoftware."])     return;
-        if ([bid hasPrefix:@"org.theos."])            return;
-        if ([bid hasPrefix:@"science.xnu."])          return;
+        if ([path hasPrefix:@"/usr/"]) return;
+        if ([path hasPrefix:@"/System/"]) return;
+        if ([bid hasPrefix:@"org.coolstar."]) return;
+        if ([bid hasPrefix:@"com.tigisoftware."]) return;
+        if ([bid hasPrefix:@"org.theos."]) return;
+        if ([bid hasPrefix:@"science.xnu."]) return;
         if ([bid isEqualToString:@"xyz.willy.Zebra"]) return;
-        if ([bid hasPrefix:@"com.opa334."])           return;
-        if ([bid hasPrefix:@"com.palera1n"])          return;
+        if ([bid hasPrefix:@"com.opa334."]) return;
+        if ([bid hasPrefix:@"com.palera1n"]) return;
 
         dispatch_async(dispatch_get_main_queue(), ^{
             MSHookFunction((void *)NSStringFromClass,
