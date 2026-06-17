@@ -9,6 +9,7 @@
 #import <dlfcn.h>
 #import <string.h>
 #import <mach/mach.h>
+#import <os/lock.h>
 
 static BOOL _stealth_is_trusted(void) {
     static BOOL trusted = NO;
@@ -63,33 +64,36 @@ static intptr_t (*orig_dyld_get_image_vmaddr_slide)(uint32_t);
 
 static uint32_t _filtered_to_real[2048];
 static uint32_t _filtered_count = 0;
-static OSSpinLock _filter_lock = OS_SPINLOCK_INIT;
+static os_unfair_lock _filter_lock = OS_UNFAIR_LOCK_INIT;
 
 // FIX: пересобираем фильтр при каждом вызове — новые dylib (стрим, substrate)
 //      загружаются позже и dispatch_once их не захватывал
 static void _stealth_rebuild_filter(void) {
-    OSSpinLockLock(&_filter_lock);
+    os_unfair_lock_lock(&_filter_lock);
     uint32_t real = orig_dyld_image_count();
     _filtered_count = 0;
     for (uint32_t i = 0; i < real && _filtered_count < 2048; i++) {
         if (!_stealth_should_hide_image(orig_dyld_get_image_name(i)))
             _filtered_to_real[_filtered_count++] = i;
     }
-    OSSpinLockUnlock(&_filter_lock);
+    os_unfair_lock_unlock(&_filter_lock);
 }
 
 static uint32_t hook_dyld_image_count(void) {
     if (_stealth_is_trusted()) return orig_dyld_image_count();
     _stealth_rebuild_filter();
-    return _filtered_count;
+    os_unfair_lock_lock(&_filter_lock);
+    uint32_t count = _filtered_count;
+    os_unfair_lock_unlock(&_filter_lock);
+    return count;
 }
 
 static const char *hook_dyld_get_image_name(uint32_t idx) {
     if (_stealth_is_trusted()) return orig_dyld_get_image_name(idx);
     _stealth_rebuild_filter();
-    OSSpinLockLock(&_filter_lock);
+    os_unfair_lock_lock(&_filter_lock);
     uint32_t real_idx = (idx < _filtered_count) ? _filtered_to_real[idx] : UINT32_MAX;
-    OSSpinLockUnlock(&_filter_lock);
+    os_unfair_lock_unlock(&_filter_lock);
     if (real_idx == UINT32_MAX) return NULL;
     return orig_dyld_get_image_name(real_idx);
 }
@@ -97,9 +101,9 @@ static const char *hook_dyld_get_image_name(uint32_t idx) {
 static const struct mach_header *hook_dyld_get_image_header(uint32_t idx) {
     if (_stealth_is_trusted()) return orig_dyld_get_image_header(idx);
     _stealth_rebuild_filter();
-    OSSpinLockLock(&_filter_lock);
+    os_unfair_lock_lock(&_filter_lock);
     uint32_t real_idx = (idx < _filtered_count) ? _filtered_to_real[idx] : UINT32_MAX;
-    OSSpinLockUnlock(&_filter_lock);
+    os_unfair_lock_unlock(&_filter_lock);
     if (real_idx == UINT32_MAX) return NULL;
     return orig_dyld_get_image_header(real_idx);
 }
@@ -107,9 +111,9 @@ static const struct mach_header *hook_dyld_get_image_header(uint32_t idx) {
 static intptr_t hook_dyld_get_image_vmaddr_slide(uint32_t idx) {
     if (_stealth_is_trusted()) return orig_dyld_get_image_vmaddr_slide(idx);
     _stealth_rebuild_filter();
-    OSSpinLockLock(&_filter_lock);
+    os_unfair_lock_lock(&_filter_lock);
     uint32_t real_idx = (idx < _filtered_count) ? _filtered_to_real[idx] : UINT32_MAX;
-    OSSpinLockUnlock(&_filter_lock);
+    os_unfair_lock_unlock(&_filter_lock);
     if (real_idx == UINT32_MAX) return 0;
     return orig_dyld_get_image_vmaddr_slide(real_idx);
 }
