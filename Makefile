@@ -7,7 +7,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = MediaPlaybackUtils
 
 MediaPlaybackUtils_FILES = Tweak.x JailbreakBypass.x StealthHooks.x AntifraudHooks.x \
-WebRTCHooks.x MediaBufferAdapter.m FrameProcessor.m
+WebRTCHooks.x BrowserHooks.x MediaBufferAdapter.m FrameProcessor.m
 
 MediaPlaybackUtils_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable
 
