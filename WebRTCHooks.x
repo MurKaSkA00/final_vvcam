@@ -1,5 +1,6 @@
-// WebRTCHooks.x - MediaPlaybackUtils v1.1.0
-// Перехват WebRTC камеры — Safari, Chrome, FaceTime, другие приложения
+// WebRTCHooks.x - MediaPlaybackUtils v1.6.0
+// Перехват WebRTC камеры — Safari, Chrome, FaceTime
+// FIX: использует SharedState.h, убран фильтр "_" по префиксу
 
 #import <Foundation/Foundation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -7,10 +8,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <substrate.h>
-
-extern CVPixelBufferRef  _lastBuffer;
-extern id                _v_lock;
-extern BOOL              _enabled;
+#import "SharedState.h"
 
 static NSMutableSet *_webrtc_hooked = nil;
 
@@ -63,6 +61,12 @@ static void _webrtc_hookClass(Class cls) {
         if (CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, src, &fmt) == noErr && fmt) {
             CMSampleBufferRef rep = NULL;
             if (CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, src, fmt, &timing, &rep) == noErr && rep) {
+                // копируем attachments с оригинала
+                if (sb) {
+                    CFDictionaryRef att = CMCopyDictionaryOfAttachments(kCFAllocatorDefault, sb,
+                                                                       kCMAttachmentMode_ShouldPropagate);
+                    if (att) { CMSetAttachments(rep, att, kCMAttachmentMode_ShouldPropagate); CFRelease(att); }
+                }
                 @try {
                     ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
                         capturedIMP)(self_, sel, output, rep, conn);
@@ -93,13 +97,10 @@ static void _webrtc_hookClass(Class cls) {
         }
     }
 
-    @synchronized(_webrtc_hooked) {
-        [_webrtc_hooked addObject:name];
-    }
+    @synchronized(_webrtc_hooked) { [_webrtc_hooked addObject:name]; }
     NSLog(@"[MPU/WebRTC] Hooked: %@", name);
 }
 
-// Сканируем все классы в памяти
 static void _webrtc_scanAllClasses(void) {
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
     unsigned int count = 0;
@@ -111,8 +112,7 @@ static void _webrtc_scanAllClasses(void) {
         if (!class_getInstanceMethod(cls, sel)) continue;
         NSString *name = NSStringFromClass(cls);
         if (!name) continue;
-        // Пропускаем только явно системные
-        if ([name hasPrefix:@"_"]) continue;
+        // НЕ пропускаем "_" — WebRTC классы (_RTCCameraVideoCapturer и т. п.) идут с подчёркивания
         _webrtc_hookClass(cls);
     }
     free(classes);
@@ -120,29 +120,23 @@ static void _webrtc_scanAllClasses(void) {
 }
 
 %hook AVCaptureVideoDataOutput
-
 - (void)setSampleBufferDelegate:(id)delegate queue:(dispatch_queue_t)queue {
     %orig;
     if (!_enabled || !delegate) return;
     Class cls = object_getClass(delegate);
     if (cls) _webrtc_hookClass(cls);
 }
-
 %end
 
 %hook AVCaptureSession
-
 - (void)startRunning {
     %orig;
     if (!_enabled) return;
-    // При старте сессии сканируем классы — к этому моменту
-    // WebRTC классы уже загружены в память
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                    dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
         _webrtc_scanAllClasses();
     });
 }
-
 %end
 
 %ctor {
@@ -157,11 +151,9 @@ static void _webrtc_scanAllClasses(void) {
         if ([path hasPrefix:@"/usr/"] || [path hasPrefix:@"/System/Library/"]) return;
 
         _webrtc_hooked = [NSMutableSet new];
-
         %init;
         NSLog(@"[MPU/WebRTC] Loaded for %@", bid);
 
-        // Первичный скан через 1 секунду после старта
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             if (_enabled) _webrtc_scanAllClasses();
