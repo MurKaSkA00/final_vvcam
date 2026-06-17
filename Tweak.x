@@ -1,11 +1,5 @@
 // Tweak.x - MediaPlaybackUtils v1.5.1
-// FIX 1: застывший кадр при переключении камеры (_lastBufferTime + сброс overlay)
-// FIX 2: фото сохраняется со стрима (правильный CGImage рендер с colorspace)
-// FIX 3: чёрный экран — CGImage fallback если IOSurface недоступен
-// FIX 4: краш при смене картинки — безопасный порядок NULL→Release для CVPixelBuffer
-// FIX 5: миниатюра фото берётся с реальной камеры — перехват previewPixelBuffer +
-//        fileDataRepresentationWithCustomizer: + отключение embedded thumbnail
-// FIX 6: зависание при съёмке — CIContext рендер вынесен ЗА пределы @synchronized
+// FIX FREEZE: вынести CIContext-рендер из @synchronized во всех методах фото
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -17,14 +11,12 @@
 
 #define MPU_PREFS_ID CFSTR("com.proximacore.mediaplaybackutils")
 
-// Не static — экспортируются для WebRTCHooks.x, AntifraudHooks.x, StealthHooks.x
-BOOL _enabled = YES;
-CVPixelBufferRef _lastBuffer = NULL;
-id _v_lock = nil;
-
+static BOOL _enabled = YES;
 static NSString *_url = @"http://192.168.1.44:8888/live/stream/index.m3u8";
 static _MPUMediaBufferAdapter *_reader = nil;
+static CVPixelBufferRef _lastBuffer = NULL;
 static CFTimeInterval _lastBufferTime = 0;
+static id _v_lock = nil;
 static CIContext *_v_ciContext = nil;
 static NSString *_currentStreamURL = nil;
 static BOOL _isSwitching = NO;
@@ -63,7 +55,6 @@ static void _v_restartStreamIfNeeded(void) {
             _reader.pixelBufferCallback = ^(CVPixelBufferRef buffer) {
                 if (!buffer) return;
                 @synchronized(_v_lock) {
-                    // FIX 4: сначала Retain новый, потом Release старый
                     CVPixelBufferRef newBuffer = CVPixelBufferRetain(buffer);
                     CVPixelBufferRef oldBuffer = _lastBuffer;
                     _lastBuffer = newBuffer;
@@ -114,28 +105,12 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
     return (s == noErr) ? out : NULL;
 }
 
-// ── FIX 6: рендер JPEG вынесен ЗА пределы @synchronized ─────────────────────
-// Сначала retain буфер (быстро, внутри лока), потом рендерим снаружи.
-// Это устраняет зависание: CIContext и JPEG компрессия больше не держат мьютекс.
-static NSData *_v_jpegFromCurrentBuffer(void) {
-    // Шаг 1: быстро захватить буфер под локом
-    CVPixelBufferRef buf = NULL;
-    @synchronized(_v_lock) {
-        if (_lastBuffer) buf = CVPixelBufferRetain(_lastBuffer);
-    }
-    if (!buf) return nil;
-
-    // Шаг 2: тяжёлые операции — ВНЕ лока
-    if (!_v_ciContext) {
-        CVPixelBufferRelease(buf);
-        return nil;
-    }
-
-    CIImage *ci = [CIImage imageWithCVPixelBuffer:buf];
-    CVPixelBufferRelease(buf); // освобождаем как только CIImage создан
-
+// ── ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ JPEG ─────────────────────────────────────────────
+// FIX FREEZE: принимает уже retain-нутый буфер, рендерит ВНЕ @synchronized
+static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
+    if (!buffer || !_v_ciContext) return nil;
+    CIImage *ci = [CIImage imageWithCVPixelBuffer:buffer];
     if (!ci) return nil;
-
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
     CGImageRef cg = [_v_ciContext createCGImage:ci
                                        fromRect:ci.extent
@@ -143,7 +118,6 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
                                      colorSpace:cs];
     CGColorSpaceRelease(cs);
     if (!cg) return nil;
-
     NSData *d = UIImageJPEGRepresentation([UIImage imageWithCGImage:cg], 0.92);
     CGImageRelease(cg);
     return d;
@@ -166,7 +140,8 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
     if (!cls) { %orig; return; }
 
     NSString *clsName = NSStringFromClass(cls);
-    if ([clsName hasPrefix:@"_"]) { %orig; return; }
+    if ([clsName hasPrefix:@"RCT"] || [clsName hasPrefix:@"WK"] ||
+        [clsName hasPrefix:@"WebKit"] || [clsName hasPrefix:@"_"]) { %orig; return; }
 
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
 
@@ -217,39 +192,49 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
 
 %hook AVCapturePhoto
 
-// FIX 6: retain буфера внутри лока, возврат снаружи
 - (CVPixelBufferRef)pixelBuffer {
-    CVPixelBufferRef buf = NULL;
     @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer) buf = CVPixelBufferRetain(_lastBuffer);
+        if (_enabled && _lastBuffer)
+            return (CVPixelBufferRef)CFAutorelease(CVPixelBufferRetain(_lastBuffer));
     }
-    if (buf) return (CVPixelBufferRef)CFAutorelease(buf);
     return %orig;
 }
 
-// FIX 5 + FIX 6: миниатюра тоже из стрима, без удержания лока
 - (CVPixelBufferRef)previewPixelBuffer {
+    @synchronized(_v_lock) {
+        if (_enabled && _lastBuffer)
+            return (CVPixelBufferRef)CFAutorelease(CVPixelBufferRetain(_lastBuffer));
+    }
+    return %orig;
+}
+
+// FIX FREEZE: забираем retain буфера под локом, рендерим CGImage вне лока
+- (NSData *)fileDataRepresentation {
     CVPixelBufferRef buf = NULL;
     @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer) buf = CVPixelBufferRetain(_lastBuffer);
+        if (_enabled && _lastBuffer)
+            buf = CVPixelBufferRetain(_lastBuffer);
     }
-    if (buf) return (CVPixelBufferRef)CFAutorelease(buf);
+    if (buf) {
+        NSData *d = _v_jpegFromBuffer(buf);
+        CVPixelBufferRelease(buf);
+        if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentation)"); return d; }
+    }
     return %orig;
 }
 
-// FIX 6: рендер полностью вне лока — устраняет зависание при съёмке
-- (NSData *)fileDataRepresentation {
-    if (!_enabled) return %orig;
-    NSData *d = _v_jpegFromCurrentBuffer();
-    if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentation)"); return d; }
-    return %orig;
-}
-
-// FIX 5 + FIX 6: iOS 16+
+// FIX FREEZE: аналогично для iOS 16+
 - (NSData *)fileDataRepresentationWithCustomizer:(id)customizer {
-    if (!_enabled) return %orig;
-    NSData *d = _v_jpegFromCurrentBuffer();
-    if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentationWithCustomizer)"); return d; }
+    CVPixelBufferRef buf = NULL;
+    @synchronized(_v_lock) {
+        if (_enabled && _lastBuffer)
+            buf = CVPixelBufferRetain(_lastBuffer);
+    }
+    if (buf) {
+        NSData *d = _v_jpegFromBuffer(buf);
+        CVPixelBufferRelease(buf);
+        if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentationWithCustomizer)"); return d; }
+    }
     return %orig;
 }
 
@@ -260,10 +245,7 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
 %hook AVCapturePhotoSettings
 
 - (void)setEmbeddedThumbnailPhotoFormat:(NSDictionary *)format {
-    if (_enabled) {
-        %orig(nil);
-        return;
-    }
+    if (_enabled) { %orig(nil); return; }
     %orig;
 }
 
@@ -301,13 +283,12 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
         objc_setAssociatedObject(self, "_v_overlay", overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
         CADisplayLink *dl = [CADisplayLink displayLinkWithTarget:self
-                                                        selector:@selector(_mpu_updateOverlay:)];
+                                                       selector:@selector(_mpu_updateOverlay:)];
         dl.preferredFramesPerSecond = 30;
         [dl addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
         objc_setAssociatedObject(self, "_v_displayLink", dl, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    // FIX мигание: только обновляем frame, НЕ сбрасываем contents
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     overlay.frame = self.bounds;
@@ -360,7 +341,6 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
             return;
         }
 
-        // Быстрый путь — IOSurface
         IOSurfaceRef surf = CVPixelBufferGetIOSurface(_lastBuffer);
         if (surf) {
             [CATransaction begin];
@@ -371,29 +351,30 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
             return;
         }
 
-        // Fallback — CGImage (для форматов без IOSurface)
-        // FIX 6: retain буфер перед выходом из лока, рендерим снаружи
-        CVPixelBufferRef buf = CVPixelBufferRetain(_lastBuffer);
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (!_v_ciContext) { CVPixelBufferRelease(buf); return; }
-            CIImage *ci = [CIImage imageWithCVPixelBuffer:buf];
-            CVPixelBufferRelease(buf);
-            if (!ci) return;
-            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-            CGImageRef cg = [_v_ciContext createCGImage:ci
-                                               fromRect:ci.extent
-                                                 format:kCIFormatBGRA8
-                                             colorSpace:cs];
-            CGColorSpaceRelease(cs);
-            if (cg) {
-                [CATransaction begin];
-                [CATransaction setDisableActions:YES];
-                overlay.contents = (__bridge id)cg;
-                overlay.frame = self.bounds;
-                [CATransaction commit];
-                CGImageRelease(cg);
+        // Fallback CGImage — тоже вне тяжёлой блокировки (буфер под локом)
+        CVPixelBufferRef bufCopy = CVPixelBufferRetain(_lastBuffer);
+        // Выходим из лока перед тяжёлым рендером
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            CIImage *ci = [CIImage imageWithCVPixelBuffer:bufCopy];
+            if (ci && _v_ciContext) {
+                CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+                CGImageRef cg = [_v_ciContext createCGImage:ci
+                                                   fromRect:ci.extent
+                                                     format:kCIFormatBGRA8
+                                                 colorSpace:cs];
+                CGColorSpaceRelease(cs);
+                if (cg) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [CATransaction begin];
+                        [CATransaction setDisableActions:YES];
+                        overlay.contents = (__bridge id)cg;
+                        overlay.frame = self.bounds;
+                        [CATransaction commit];
+                        CGImageRelease(cg);
+                    });
+                }
             }
+            CVPixelBufferRelease(bufCopy);
         });
     }
 }
@@ -450,6 +431,7 @@ static NSData *_v_jpegFromCurrentBuffer(void) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
+        if ([bid hasPrefix:@"com.apple.WebKit"]) return;
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
         if ([bid hasPrefix:@"com.apple.coremedia"]) return;
