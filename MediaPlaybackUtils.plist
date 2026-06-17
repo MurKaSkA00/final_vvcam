@@ -13,6 +13,7 @@
             <string>com.apple.mobilesafari</string>
             <string>com.apple.SafariViewService</string>
             <string>com.apple.WebKit.WebContent</string>
+            <string>com.apple.WebKit.GPU</string>
             <string>com.apple.WebKit.Networking</string>
             <string>com.google.chrome.ios</string>
             <string>com.google.chrome.ios.SafariViewService</string>
