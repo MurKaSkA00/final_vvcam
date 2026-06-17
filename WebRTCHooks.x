@@ -150,15 +150,11 @@ static void _webrtc_scanAllClasses(void) {
         NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
-<<<<<<< HEAD
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
         if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
         if ([path hasPrefix:@"/usr/"] || [path hasPrefix:@"/System/Library/"]) return;
-=======
-        if ([path hasPrefix:@"/usr/"] || [path hasPrefix:@"/System/"]) return;
->>>>>>> 1110ea636266ecba637513ec5bf9eb6919f0ec44
 
         _webrtc_hooked = [NSMutableSet new];
 

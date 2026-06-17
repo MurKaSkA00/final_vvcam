@@ -11,6 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve git conflict markers
+        run: |
+          for f in $(grep -rl "<<<<<<< HEAD" . --include="*.x" --include="*.m" --include="*.h" 2>/dev/null); do
+            echo "Fixing conflict markers in: $f"
+            # Keep HEAD side (between <<<<<<< HEAD and =======), discard incoming side
+            perl -i -0pe '
+              s/<<<<<<< [^\n]*\n(.*?)=======\n.*?>>>>>>> [^\n]*\n/$1/gs
+            ' "$f"
+          done
+
       - name: Setup Theos
         run: |
           git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
