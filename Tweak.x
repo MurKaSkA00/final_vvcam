@@ -17,12 +17,14 @@
 
 #define MPU_PREFS_ID CFSTR("com.proximacore.mediaplaybackutils")
 
-static BOOL _enabled = YES;
+// Не static — экспортируются для WebRTCHooks.x, AntifraudHooks.x, StealthHooks.x
+BOOL _enabled = YES;
+CVPixelBufferRef _lastBuffer = NULL;
+id _v_lock = nil;
+
 static NSString *_url = @"http://192.168.1.44:8888/live/stream/index.m3u8";
 static _MPUMediaBufferAdapter *_reader = nil;
-static CVPixelBufferRef _lastBuffer = NULL;
 static CFTimeInterval _lastBufferTime = 0;
-static id _v_lock = nil;
 static CIContext *_v_ciContext = nil;
 static NSString *_currentStreamURL = nil;
 static BOOL _isSwitching = NO;
