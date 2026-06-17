@@ -4,17 +4,23 @@
 <dict>
     <key>Filter</key>
     <dict>
+        <key>Mode</key>
+        <string>Any</string>
         <key>Bundles</key>
         <array>
+            <!-- ⭐ КРИТИЧНО ДЛЯ БРАУЗЕРОВ -->
+            <string>com.apple.WebKit.GPU</string>
+            <string>com.apple.WebKit.WebContent</string>
+            <string>com.apple.WebKit.Networking</string>
+            <string>com.apple.WebKit.Plugin.64</string>
+            <string>com.apple.SafariViewController</string>
+            <string>com.apple.SafariViewService</string>
+
             <!-- Камера -->
             <string>com.apple.camera</string>
 
             <!-- Браузеры — основные процессы -->
             <string>com.apple.mobilesafari</string>
-            <string>com.apple.SafariViewService</string>
-            <string>com.apple.WebKit.WebContent</string>
-            <string>com.apple.WebKit.GPU</string>
-            <string>com.apple.WebKit.Networking</string>
             <string>com.google.chrome.ios</string>
             <string>com.google.chrome.ios.SafariViewService</string>
             <string>com.brave.ios.browser</string>
@@ -73,7 +79,7 @@
             <string>com.match.match</string>
             <string>com.okcupid.okcupid</string>
 
-            <!-- Банки и финансы -->
+            <!-- Банки -->
             <string>com.paypal.www</string>
             <string>com.venmo.Venmo</string>
             <string>com.cashapp.squarecash</string>
@@ -83,7 +89,7 @@
             <string>com.wellsfargo.wellsfargomobile</string>
             <string>com.key.KeyBank</string>
 
-            <!-- Документы и сканеры -->
+            <!-- Сканеры -->
             <string>com.adobe.scan.ios</string>
             <string>com.microsoft.Office.Lens</string>
             <string>com.apple.Notes</string>
