@@ -1,5 +1,11 @@
-// Tweak.x - MediaPlaybackUtils v1.5.1
-// FIX FREEZE: вынести CIContext-рендер из @synchronized во всех методах фото
+// Tweak.x - MediaPlaybackUtils v1.6.0
+// FIX:
+//  - убран static у _enabled/_lastBuffer/_v_lock (линковка с другими .x)
+//  - убран фильтр по префиксам _/RCT/WK (он рубил WebRTC/RN/WebKit-классы)
+//  - сужен @synchronized(_v_lock): только над _lastBuffer
+//  - порог рестарта поднят с 2s до 10s + soft-restart (без stop)
+//  - CMSampleBuffer attachments копируются с оригинала (антифрод видит metadata)
+//  - добавлен %hook AVSampleBufferDisplayLayer (фильтры / WebRTC preview)
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -11,16 +17,20 @@
 
 #define MPU_PREFS_ID CFSTR("com.proximacore.mediaplaybackutils")
 
-BOOL _enabled = YES;
-static NSString *_url = @"http://192.168.1.44:8888/live/stream/index.m3u8";
-static _MPUMediaBufferAdapter *_reader = nil;
-CVPixelBufferRef _lastBuffer = NULL;
-static CFTimeInterval _lastBufferTime = 0;
-id _v_lock = nil;
-static CIContext *_v_ciContext = nil;
-static NSString *_currentStreamURL = nil;
-static BOOL _isSwitching = NO;
+// === ОБЩИЕ ПЕРЕМЕННЫЕ (без static — видны другим .x) ===
+BOOL              _enabled        = YES;
+CVPixelBufferRef  _lastBuffer     = NULL;
+id                _v_lock         = nil;
+CFTimeInterval    _lastBufferTime = 0;
 
+// === ЛОКАЛЬНОЕ ===
+static NSString             *_url             = @"http://192.168.1.44:8888/live/stream/index.m3u8";
+static _MPUMediaBufferAdapter *_reader        = nil;
+static CIContext            *_v_ciContext     = nil;
+static NSString             *_currentStreamURL = nil;
+static BOOL                  _isSwitching     = NO;
+
+// ── prefs ────────────────────────────────────────────────────────────────────
 static void _v_loadPrefs(void) {
     CFPreferencesAppSynchronize(MPU_PREFS_ID);
     CFPropertyListRef en = CFPreferencesCopyAppValue(CFSTR("enabled"), MPU_PREFS_ID);
@@ -39,9 +49,19 @@ static void _v_loadPrefs(void) {
     }
 }
 
+// ── рестарт потока ───────────────────────────────────────────────────────────
 static void _v_restartStreamIfNeeded(void) {
-    @synchronized(_v_lock) {
-        if (_reader && ![_currentStreamURL isEqualToString:_url]) {
+    static dispatch_queue_t restartQ;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        restartQ = dispatch_queue_create("com.proximacore.mpu.restart", DISPATCH_QUEUE_SERIAL);
+    });
+
+    dispatch_async(restartQ, ^{
+        BOOL needRestart = NO;
+        if (_reader && ![_currentStreamURL isEqualToString:_url]) needRestart = YES;
+
+        if (needRestart) {
             _isSwitching = YES;
             [_reader stopStreaming];
             _reader = nil;
@@ -54,19 +74,20 @@ static void _v_restartStreamIfNeeded(void) {
             _reader = [[_MPUMediaBufferAdapter alloc] initWithURL:u];
             _reader.pixelBufferCallback = ^(CVPixelBufferRef buffer) {
                 if (!buffer) return;
+                CVPixelBufferRef newBuf = CVPixelBufferRetain(buffer);
+                CVPixelBufferRef oldBuf = NULL;
                 @synchronized(_v_lock) {
-                    CVPixelBufferRef newBuffer = CVPixelBufferRetain(buffer);
-                    CVPixelBufferRef oldBuffer = _lastBuffer;
-                    _lastBuffer = newBuffer;
+                    oldBuf = _lastBuffer;
+                    _lastBuffer = newBuf;
                     _lastBufferTime = CACurrentMediaTime();
                     _isSwitching = NO;
-                    if (oldBuffer) CVPixelBufferRelease(oldBuffer);
                 }
+                if (oldBuf) CVPixelBufferRelease(oldBuf);
             };
             [_reader startStreaming];
             NSLog(@"[MPU] Stream started: %@", _url);
         }
-    }
+    });
 }
 
 static void _v_init(void) { _v_restartStreamIfNeeded(); }
@@ -74,11 +95,10 @@ static void _v_init(void) { _v_restartStreamIfNeeded(); }
 static void _v_prefsChanged(CFNotificationCenterRef c, void *o, CFStringRef n,
                              const void *obj, CFDictionaryRef i) {
     _v_loadPrefs();
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        _v_restartStreamIfNeeded();
-    });
+    _v_restartStreamIfNeeded();
 }
 
+// ── создание замещающего sample-buffer С КОПИРОВАНИЕМ ATTACHMENTS ───────────
 static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef original) {
     CVPixelBufferRef src = NULL;
     @synchronized(_v_lock) {
@@ -102,11 +122,53 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
     OSStatus s = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, src, fmt, &timing, &out);
     CFRelease(fmt);
     CVPixelBufferRelease(src);
-    return (s == noErr) ? out : NULL;
+
+    if (s != noErr || !out) return NULL;
+
+    // ── КОПИРУЕМ ATTACHMENTS С ОРИГИНАЛА (это видит антифрод) ──
+    if (original) {
+        // 1. sample attachments array (per-sample: DependsOnOthers, NotSync, etc.)
+        CFArrayRef srcArr = CMSampleBufferGetSampleAttachmentsArray(original, false);
+        if (srcArr && CFArrayGetCount(srcArr) > 0) {
+            CFArrayRef dstArr = CMSampleBufferGetSampleAttachmentsArray(out, true);
+            if (dstArr && CFArrayGetCount(dstArr) > 0) {
+                CFDictionaryRef srcDict = CFArrayGetValueAtIndex(srcArr, 0);
+                CFMutableDictionaryRef dstDict =
+                    (CFMutableDictionaryRef)CFArrayGetValueAtIndex(dstArr, 0);
+                if (srcDict && dstDict) {
+                    CFIndex n = CFDictionaryGetCount(srcDict);
+                    if (n > 0) {
+                        const void **keys = malloc(sizeof(void *) * n);
+                        const void **vals = malloc(sizeof(void *) * n);
+                        CFDictionaryGetKeysAndValues(srcDict, keys, vals);
+                        for (CFIndex i = 0; i < n; i++)
+                            CFDictionarySetValue(dstDict, keys[i], vals[i]);
+                        free(keys); free(vals);
+                    }
+                }
+            }
+        }
+        // 2. buffer-level attachments (ISP-info, lens, focus, exposure...)
+        CFDictionaryRef bufAtt = CMCopyDictionaryOfAttachments(kCFAllocatorDefault,
+                                                                original,
+                                                                kCMAttachmentMode_ShouldPropagate);
+        if (bufAtt) {
+            CMSetAttachments(out, bufAtt, kCMAttachmentMode_ShouldPropagate);
+            CFRelease(bufAtt);
+        }
+        CFDictionaryRef bufAtt2 = CMCopyDictionaryOfAttachments(kCFAllocatorDefault,
+                                                                 original,
+                                                                 kCMAttachmentMode_ShouldNotPropagate);
+        if (bufAtt2) {
+            CMSetAttachments(out, bufAtt2, kCMAttachmentMode_ShouldNotPropagate);
+            CFRelease(bufAtt2);
+        }
+    }
+
+    return out;
 }
 
-// ── ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ JPEG ─────────────────────────────────────────────
-// FIX FREEZE: принимает уже retain-нутый буфер, рендерит ВНЕ @synchronized
+// ── JPEG из буфера (для photo) ───────────────────────────────────────────────
 static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
     if (!buffer || !_v_ciContext) return nil;
     CIImage *ci = [CIImage imageWithCVPixelBuffer:buffer];
@@ -123,8 +185,25 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
     return d;
 }
 
-// ── 1. ПЕРЕХВАТ ДЕЛЕГАТА ──────────────────────────────────────────────────────
+// ── helpers: нужно ли пропустить класс ───────────────────────────────────────
+// Раньше отсекали по префиксу "_"/"RCT"/"WK" — это рубило WebRTC/RN/WebKit.
+// Теперь — точечный чёрный список.
+static BOOL _v_shouldSkipClass(NSString *clsName) {
+    if (!clsName) return YES;
+    static NSArray *blacklist;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        blacklist = @[
+            @"_AVAssetWriterInputCaptureSampleBufferDelegate",
+            @"AVCaptureMovieFileOutputInternal",
+            @"AVCaptureSessionPresetResolver",
+        ];
+    });
+    for (NSString *b in blacklist) if ([clsName isEqualToString:b]) return YES;
+    return NO;
+}
 
+// ── 1. ПЕРЕХВАТ DELEGATE У AVCaptureVideoDataOutput ─────────────────────────
 %hook AVCaptureVideoDataOutput
 
 - (void)setSampleBufferDelegate:(id<AVCaptureVideoDataOutputSampleBufferDelegate>)delegate
@@ -140,8 +219,7 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
     if (!cls) { %orig; return; }
 
     NSString *clsName = NSStringFromClass(cls);
-    if ([clsName hasPrefix:@"RCT"] || [clsName hasPrefix:@"WK"] ||
-        [clsName hasPrefix:@"WebKit"] || [clsName hasPrefix:@"_"]) { %orig; return; }
+    if (_v_shouldSkipClass(clsName)) { %orig; return; }
 
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
 
@@ -150,8 +228,7 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
             Method m = class_getInstanceMethod(cls, sel);
             if (m) {
                 const char *types = method_getTypeEncoding(m);
-                IMP origIMP = method_getImplementation(m);
-                __block IMP capturedIMP = origIMP;
+                __block IMP capturedIMP = method_getImplementation(m);
 
                 IMP newIMP = imp_implementationWithBlock(^(id self_,
                     AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
@@ -179,7 +256,7 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
                     if (prev) capturedIMP = prev;
                 }
                 [swizzled addObject:clsName];
-                NSLog(@"[MPU] Hooked: %@", clsName);
+                NSLog(@"[MPU] Hooked delegate: %@", clsName);
             }
         }
     }
@@ -188,83 +265,62 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
 
 %end
 
-// ── 2. ПЕРЕХВАТ ФОТО ──────────────────────────────────────────────────────────
-
+// ── 2. ПЕРЕХВАТ ФОТО ─────────────────────────────────────────────────────────
 %hook AVCapturePhoto
 
 - (CVPixelBufferRef)pixelBuffer {
-    @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer)
-            return (CVPixelBufferRef)CFAutorelease(CVPixelBufferRetain(_lastBuffer));
-    }
+    CVPixelBufferRef buf = NULL;
+    @synchronized(_v_lock) { if (_enabled && _lastBuffer) buf = CVPixelBufferRetain(_lastBuffer); }
+    if (buf) return (CVPixelBufferRef)CFAutorelease(buf);
     return %orig;
 }
 
 - (CVPixelBufferRef)previewPixelBuffer {
-    @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer)
-            return (CVPixelBufferRef)CFAutorelease(CVPixelBufferRetain(_lastBuffer));
-    }
+    CVPixelBufferRef buf = NULL;
+    @synchronized(_v_lock) { if (_enabled && _lastBuffer) buf = CVPixelBufferRetain(_lastBuffer); }
+    if (buf) return (CVPixelBufferRef)CFAutorelease(buf);
     return %orig;
 }
 
-// FIX FREEZE: забираем retain буфера под локом, рендерим CGImage вне лока
 - (NSData *)fileDataRepresentation {
     CVPixelBufferRef buf = NULL;
-    @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer)
-            buf = CVPixelBufferRetain(_lastBuffer);
-    }
+    @synchronized(_v_lock) { if (_enabled && _lastBuffer) buf = CVPixelBufferRetain(_lastBuffer); }
     if (buf) {
         NSData *d = _v_jpegFromBuffer(buf);
         CVPixelBufferRelease(buf);
-        if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentation)"); return d; }
+        if (d) return d;
     }
     return %orig;
 }
 
-// FIX FREEZE: аналогично для iOS 16+
 - (NSData *)fileDataRepresentationWithCustomizer:(id)customizer {
     CVPixelBufferRef buf = NULL;
-    @synchronized(_v_lock) {
-        if (_enabled && _lastBuffer)
-            buf = CVPixelBufferRetain(_lastBuffer);
-    }
+    @synchronized(_v_lock) { if (_enabled && _lastBuffer) buf = CVPixelBufferRetain(_lastBuffer); }
     if (buf) {
         NSData *d = _v_jpegFromBuffer(buf);
         CVPixelBufferRelease(buf);
-        if (d) { NSLog(@"[MPU] Photo from stream (fileDataRepresentationWithCustomizer)"); return d; }
+        if (d) return d;
     }
     return %orig;
 }
 
 %end
 
-// ── 2.5. ОТКЛЮЧЕНИЕ EMBEDDED THUMBNAIL ───────────────────────────────────────
-
 %hook AVCapturePhotoSettings
-
 - (void)setEmbeddedThumbnailPhotoFormat:(NSDictionary *)format {
     if (_enabled) { %orig(nil); return; }
     %orig;
 }
-
 %end
 
 %hook AVCapturePhotoOutput
-
-- (void)capturePhotoWithSettings:(AVCapturePhotoSettings *)settings
-                        delegate:(id)delegate {
-    if (_enabled) {
-        [settings setEmbeddedThumbnailPhotoFormat:nil];
-    }
+- (void)capturePhotoWithSettings:(AVCapturePhotoSettings *)settings delegate:(id)delegate {
+    if (_enabled) [settings setEmbeddedThumbnailPhotoFormat:nil];
     %orig;
 }
-
 %end
 
-// ── 3. ПРЕДПРОСМОТР ───────────────────────────────────────────────────────────
-
+// ── 3. ПРЕДПРОСМОТР — AVCaptureVideoPreviewLayer ────────────────────────────
 %hook AVCaptureVideoPreviewLayer
 
 - (void)layoutSublayers {
@@ -303,86 +359,88 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
     CALayer *overlay = objc_getAssociatedObject(self, "_v_overlay");
     if (!overlay) return;
 
+    // === КОРОТКИЙ лок: только дёрнуть retain буфера ===
+    CVPixelBufferRef bufCopy = NULL;
+    CFTimeInterval bufTime   = 0;
+    BOOL switching;
     @synchronized(_v_lock) {
-        if (!_lastBuffer) {
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            overlay.contents = nil;
-            overlay.backgroundColor = [UIColor blackColor].CGColor;
-            [CATransaction commit];
-            return;
-        }
+        if (_lastBuffer) bufCopy = CVPixelBufferRetain(_lastBuffer);
+        bufTime = _lastBufferTime;
+        switching = _isSwitching;
+    }
 
-        CFTimeInterval age = CACurrentMediaTime() - _lastBufferTime;
-        if (!_isSwitching && _lastBufferTime > 0 && age > 2.0) {
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            overlay.contents = nil;
-            overlay.backgroundColor = [UIColor blackColor].CGColor;
-            [CATransaction commit];
+    if (!bufCopy) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        overlay.contents = nil;
+        overlay.backgroundColor = [UIColor blackColor].CGColor;
+        [CATransaction commit];
+        return;
+    }
 
-            if (!_isSwitching) {
-                _isSwitching = YES;
-                CVPixelBufferRef toRelease = _lastBuffer;
-                _lastBuffer = NULL;
-                _lastBufferTime = 0;
-                if (toRelease) CVPixelBufferRelease(toRelease);
-                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                    @synchronized(_v_lock) {
-                        if (_reader) {
-                            [_reader stopStreaming];
-                            _reader = nil;
-                            _currentStreamURL = nil;
-                        }
-                    }
-                    _v_restartStreamIfNeeded();
-                });
-            }
-            return;
-        }
-
-        IOSurfaceRef surf = CVPixelBufferGetIOSurface(_lastBuffer);
-        if (surf) {
-            [CATransaction begin];
-            [CATransaction setDisableActions:YES];
-            overlay.contents = (__bridge id)surf;
-            overlay.frame = self.bounds;
-            [CATransaction commit];
-            return;
-        }
-
-        // Fallback CGImage — тоже вне тяжёлой блокировки (буфер под локом)
-        CVPixelBufferRef bufCopy = CVPixelBufferRetain(_lastBuffer);
-        // Выходим из лока перед тяжёлым рендером
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-            CIImage *ci = [CIImage imageWithCVPixelBuffer:bufCopy];
-            if (ci && _v_ciContext) {
-                CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-                CGImageRef cg = [_v_ciContext createCGImage:ci
-                                                   fromRect:ci.extent
-                                                     format:kCIFormatBGRA8
-                                                 colorSpace:cs];
-                CGColorSpaceRelease(cs);
-                if (cg) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [CATransaction begin];
-                        [CATransaction setDisableActions:YES];
-                        overlay.contents = (__bridge id)cg;
-                        overlay.frame = self.bounds;
-                        [CATransaction commit];
-                        CGImageRelease(cg);
-                    });
-                }
-            }
-            CVPixelBufferRelease(bufCopy);
+    // soft-restart: порог 10s, без stopStreaming (просто reconnect)
+    CFTimeInterval age = CACurrentMediaTime() - bufTime;
+    if (!switching && bufTime > 0 && age > 10.0) {
+        _isSwitching = YES;
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            _v_restartStreamIfNeeded();
         });
     }
+
+    IOSurfaceRef surf = CVPixelBufferGetIOSurface(bufCopy);
+    if (surf) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        overlay.contents = (__bridge id)surf;
+        overlay.frame = self.bounds;
+        [CATransaction commit];
+        CVPixelBufferRelease(bufCopy);
+        return;
+    }
+
+    // fallback CGImage в фоне
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+        CIImage *ci = [CIImage imageWithCVPixelBuffer:bufCopy];
+        if (ci && _v_ciContext) {
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+            CGImageRef cg = [_v_ciContext createCGImage:ci fromRect:ci.extent
+                                                  format:kCIFormatBGRA8 colorSpace:cs];
+            CGColorSpaceRelease(cs);
+            if (cg) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [CATransaction begin];
+                    [CATransaction setDisableActions:YES];
+                    overlay.contents = (__bridge id)cg;
+                    overlay.frame = self.bounds;
+                    [CATransaction commit];
+                    CGImageRelease(cg);
+                });
+            }
+        }
+        CVPixelBufferRelease(bufCopy);
+    });
 }
 
 %end
 
-// ── 3.5. ПЕРЕХВАТ СЕССИИ ─────────────────────────────────────────────────────
+// ── 3a. ПРЕДПРОСМОТР — AVSampleBufferDisplayLayer (фильтры, WebRTC) ──────────
+%hook AVSampleBufferDisplayLayer
 
+- (void)enqueueSampleBuffer:(CMSampleBufferRef)sampleBuffer {
+    if (!_enabled || !sampleBuffer) { %orig; return; }
+    _v_init();
+    CMSampleBufferRef rep = _v_makeReplacementSampleBuffer(sampleBuffer);
+    if (rep) {
+        %orig(rep);
+        CFRelease(rep);
+        return;
+    }
+    %orig;
+}
+
+%end
+
+// ── 4. СЕССИЯ ────────────────────────────────────────────────────────────────
 %hook AVCaptureSession
 
 - (void)startRunning {
@@ -394,9 +452,7 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
                 AVCaptureVideoDataOutput *vdo = (AVCaptureVideoDataOutput *)output;
                 id delegate = vdo.sampleBufferDelegate;
                 dispatch_queue_t queue = vdo.sampleBufferCallbackQueue;
-                if (delegate && queue) {
-                    [vdo setSampleBufferDelegate:delegate queue:queue];
-                }
+                if (delegate && queue) [vdo setSampleBufferDelegate:delegate queue:queue];
             }
         }
     }
@@ -405,8 +461,7 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
 
 %end
 
-// ── 4. УСТРОЙСТВО ─────────────────────────────────────────────────────────────
-
+// ── 5. УСТРОЙСТВО ────────────────────────────────────────────────────────────
 %hook AVCaptureDevice
 
 + (AVCaptureDevice *)defaultDeviceWithMediaType:(AVMediaType)mediaType {
@@ -423,20 +478,18 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
 
 %end
 
-// ── ИНИЦИАЛИЗАЦИЯ ─────────────────────────────────────────────────────────────
-
+// ── ИНИЦИАЛИЗАЦИЯ ────────────────────────────────────────────────────────────
 %ctor {
     @autoreleasepool {
-        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
-        if ([bid hasPrefix:@"com.apple.WebKit"]) return;
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
+        if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
         if ([bid hasPrefix:@"com.apple.coremedia"]) return;
         if ([bid hasPrefix:@"com.apple.avconferenced"]) return;
-        if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
         if ([path hasPrefix:@"/usr/"]) return;
         if ([path hasPrefix:@"/System/Library/"]) return;
 
