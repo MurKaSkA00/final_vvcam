@@ -193,7 +193,10 @@ static BOOL _brw_isBrowserProcess(NSString *bid) {
         // ЭТОТ файл — ТОЛЬКО для браузеров. В Telegram/Camera работает Tweak.x
         if (!_brw_isBrowserProcess(bid)) return;
 
-        if ([path hasPrefix:@"/usr/"] || [path hasPrefix:@"/System/Library/"]) return;
+        // ВАЖНО: com.apple.WebKit.GPU / WebContent / Networking физически живут в
+        // /System/Library/Frameworks/WebKit.framework/XPCServices/ — НЕ скипаем их.
+        // Скипаем только /usr/, остальные WebKit-процессы должны загрузиться.
+        if ([path hasPrefix:@"/usr/"]) return;
 
         _brw_hooked = [NSMutableSet new];
         %init;
