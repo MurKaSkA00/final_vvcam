@@ -136,6 +136,13 @@ static NSString *hook_NSStringFromClass(Class cls) {
         NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
+
+        // FIX: для PayPal оставляем только JailbreakBypass.x.
+        // NSStringFromClass / NSUserDefaults objectForKey: подменяются через
+        // dispatch_async — PayPal SDK в этот момент уже на середине запуска,
+        // подмена ломает кэш классов и приложение мгновенно закрывается.
+        if ([bid hasPrefix:@"com.paypal."]) return;
+
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
         if ([path hasPrefix:@"/usr/"]) return;
         if ([path hasPrefix:@"/System/"]) return;
