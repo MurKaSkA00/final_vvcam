@@ -481,12 +481,16 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
 // ── ИНИЦИАЛИЗАЦИЯ ────────────────────────────────────────────────────────────
 %ctor {
     @autoreleasepool {
-        if ([bid hasPrefix:@"com.apple.springboard"]) return;
-        if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
-        if ([bid hasPrefix:@"com.apple.assetsd"]) return;
-        if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
-        if ([bid hasPrefix:@"com.apple.coremedia"]) return;
-        if ([bid hasPrefix:@"com.apple.avconferenced"]) return;
+        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *path = [[NSBundle mainBundle] bundlePath];
+        if (!bid) return;
+
+        if ([bid hasPrefix:@"com.apple.springboard"])     return;
+        if ([bid hasPrefix:@"com.apple.mediaserverd"])    return;
+        if ([bid hasPrefix:@"com.apple.assetsd"])         return;
+        if ([bid hasPrefix:@"com.apple.cameracaptured"])  return;
+        if ([bid hasPrefix:@"com.apple.coremedia"])       return;
+        if ([bid hasPrefix:@"com.apple.avconferenced"])   return;
 
         // FIX: WebKit/Safari/Chrome/Brave/Edge/Firefox/Opera/DDG/Kagi.
         // BrowserHooks.x в проекте отсутствует, поэтому здесь камеру в
@@ -506,6 +510,10 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         if ([path hasPrefix:@"/usr/"]) return;
         if ([path hasPrefix:@"/System/Library/"]) return;
 
+        _v_lock = [NSObject new];
+        _v_ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer: @NO}];
+        _v_loadPrefs();
+
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), NULL, _v_prefsChanged,
             CFSTR("com.proximacore.mediaplaybackutils/prefsChanged"),
@@ -517,3 +525,4 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         }
     }
 }
+
