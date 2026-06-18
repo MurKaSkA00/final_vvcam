@@ -490,8 +490,10 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
         if ([bid hasPrefix:@"com.apple.coremedia"]) return;
         if ([bid hasPrefix:@"com.apple.avconferenced"]) return;
+        // FIX: НЕ скипаем com.apple.WebKit.* — там живёт камера Safari/Chrome (getUserMedia).
+        BOOL isWebKit = [bid hasPrefix:@"com.apple.WebKit"];
         if ([path hasPrefix:@"/usr/"]) return;
-        if ([path hasPrefix:@"/System/Library/"]) return;
+        if (!isWebKit && [path hasPrefix:@"/System/Library/"]) return;
 
         _v_lock = [NSObject new];
         _v_ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer: @NO}];
