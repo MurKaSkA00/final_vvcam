@@ -1,4 +1,4 @@
-// JailbreakBypass.x - MediaPlaybackUtils v1.4.3 (FIXED)
+// JailbreakBypass.x - MediaPlaybackUtils v1.7.3
 // Скрывает джейлбрейк ТОЛЬКО от конкретных целевых приложений.
 // НЕ убивает Sileo, Filza, palera1n, Chrome.
 
@@ -8,6 +8,7 @@
 #import <dlfcn.h>
 #import <sys/stat.h>
 #import <sys/types.h>
+#import <sys/mount.h>
 #import <unistd.h>
 #import <fcntl.h>
 #import <dirent.h>
@@ -17,8 +18,6 @@
 
 // ========================================
 // СПИСОК ПРИЛОЖЕНИЙ, от которых скрываем джейл.
-// ИСПРАВЛЕНИЕ: добавь сюда только нужные bundle ID.
-// Sileo, Filza, Chrome, palera1n — НЕ должны быть тут.
 // ========================================
 static NSArray<NSString *> *_jb_targetBundles(void) {
     static NSArray *list = nil;
@@ -55,21 +54,42 @@ static NSArray<NSString *> *_jb_blacklist(void) {
             @"/Applications/Cydia.app",
             @"/Library/MobileSubstrate",
             @"/Library/Substitute",
+            @"/Library/TweakInject",
             @"/usr/lib/libsubstrate.dylib",
             @"/usr/lib/libhooker.dylib",
+            @"/usr/lib/libellekit.dylib",
+            @"/usr/lib/libsubstitute.dylib",
             @"/usr/lib/substrate",
+            @"/usr/lib/TweakInject.dylib",
             @"/usr/bin/cycript",
             @"/usr/bin/ssh",
             @"/usr/sbin/sshd",
+            @"/usr/bin/sileo",
             @"/etc/apt",
             @"/etc/ssh/sshd_config",
             @"/private/var/lib/apt",
             @"/private/var/lib/cydia",
             @"/private/var/stash",
             @"/private/var/tmp/cydia.log",
-            // ИСПРАВЛЕНИЕ: /var/jb НЕ добавляем полностью в blacklist,
-            // иначе Sileo/Filza которые живут там перестанут работать.
-            // Добавляем только конкретные файлы-индикаторы:
+            @"/bin/bash",
+            @"/bin/sh",
+            // FIX 2: rootless варианты (/var/jb/) — PayPal делает прямые stat() на них.
+            @"/var/jb/Library/MobileSubstrate",
+            @"/var/jb/Library/Substitute",
+            @"/var/jb/Library/TweakInject",
+            @"/var/jb/usr/lib/libsubstrate.dylib",
+            @"/var/jb/usr/lib/libhooker.dylib",
+            @"/var/jb/usr/lib/libellekit.dylib",
+            @"/var/jb/usr/lib/libsubstitute.dylib",
+            @"/var/jb/usr/lib/TweakInject.dylib",
+            @"/var/jb/usr/bin/cycript",
+            @"/var/jb/usr/bin/ssh",
+            @"/var/jb/etc/apt",
+            @"/var/jb/etc/ssh/sshd_config",
+            @"/var/jb/bin/bash",
+            @"/var/jb/bin/sh",
+            @"/var/jb/Applications/Cydia.app",
+            // /var/jb НЕ добавляем полностью — там Sileo/Filza.
             @"/var/jb/.jailbroken",
             @"/.installed_unc0ver",
             @"/.bootstrapped_electra",
@@ -92,7 +112,7 @@ static BOOL _path_is_blacklisted(const char *path) {
 }
 
 // ========================================
-// SYSCALL HOOKS — активны только если _jb_shouldBypass == YES
+// SYSCALL HOOKS
 // ========================================
 
 static int (*orig_stat)(const char *, struct stat *);
@@ -137,9 +157,6 @@ static DIR *hook_opendir(const char *path) {
     return orig_opendir(path);
 }
 
-// ИСПРАВЛЕНИЕ: hook_fork УДАЛЁН — он убивал Chrome, WKWebView и другие приложения.
-// fork не является надёжным индикатором джейлбрейка в iOS 15+.
-
 static char *(*orig_getenv)(const char *);
 static char *hook_getenv(const char *name) {
     if (!name) return orig_getenv(name);
@@ -151,18 +168,63 @@ static char *hook_getenv(const char *name) {
     return orig_getenv(name);
 }
 
-// ИСПРАВЛЕНИЕ: dlopen hook НЕ блокирует /var/jb/ целиком —
-// иначе Sileo и Filza не смогут загрузить свои либы.
+// FIX 2: dlsym — PayPal SDK дёргает dlsym(RTLD_DEFAULT, "MSHookFunction") и аналоги.
+static void *(*orig_dlsym)(void *, const char *);
+static void *hook_dlsym(void *handle, const char *symbol) {
+    if (_jb_shouldBypass && symbol) {
+        if (strstr(symbol, "MSHookFunction"))     return NULL;
+        if (strstr(symbol, "MSHookMessageEx"))    return NULL;
+        if (strstr(symbol, "MSGetImageByName"))   return NULL;
+        if (strstr(symbol, "MSFindSymbol"))       return NULL;
+        if (strstr(symbol, "LHHookFunctions"))    return NULL;
+        if (strstr(symbol, "SubHookFunction"))    return NULL;
+        if (strstr(symbol, "EKHook"))             return NULL;
+        if (strstr(symbol, "_logos_"))            return NULL;
+    }
+    return orig_dlsym(handle, symbol);
+}
+
+// FIX 2: readlink — антифрод проверяет симлинки.
+static ssize_t (*orig_readlink)(const char *, char *, size_t);
+static ssize_t hook_readlink(const char *path, char *buf, size_t bufsize) {
+    if (_jb_shouldBypass && _path_is_blacklisted(path)) { errno = ENOENT; return -1; }
+    return orig_readlink(path, buf, bufsize);
+}
+
+// FIX 2: statfs — PayPal проверяет writable root через MNT_RDONLY.
+static int (*orig_statfs)(const char *, struct statfs *);
+static int hook_statfs(const char *path, struct statfs *buf) {
+    int r = orig_statfs(path, buf);
+    if (_jb_shouldBypass && r == 0 && buf && path) {
+        if (strcmp(path, "/") == 0) {
+            buf->f_flags |= MNT_RDONLY;
+        }
+    }
+    return r;
+}
+
+// FIX 2: dlopen — расширенный фильтр (containsString вместо hasSuffix).
 static void *(*orig_dlopen)(const char *, int);
 static void *hook_dlopen(const char *path, int mode) {
     if (_jb_shouldBypass && path) {
         NSString *p = [NSString stringWithUTF8String:path];
         if (p) {
-            // Блокируем только конкретные substrate-библиотеки:
-            if ([p hasSuffix:@"/libsubstrate.dylib"]) return NULL;
-            if ([p hasSuffix:@"/libhooker.dylib"]) return NULL;
-            if ([p hasSuffix:@"/libellekit.dylib"]) return NULL;
-            // НЕ блокируем весь /var/jb/ — там живёт Sileo/Filza
+            NSString *lp = [p lowercaseString];
+            if ([lp hasSuffix:@"libsubstrate.dylib"]) return NULL;
+            if ([lp hasSuffix:@"libhooker.dylib"]) return NULL;
+            if ([lp hasSuffix:@"libellekit.dylib"]) return NULL;
+            if ([lp hasSuffix:@"libsubstitute.dylib"]) return NULL;
+            if ([lp hasSuffix:@"libroothideboot.dylib"]) return NULL;
+            if ([lp containsString:@"mobilesubstrate"]) return NULL;
+            if ([lp containsString:@"substrate"]) return NULL;
+            if ([lp containsString:@"substitute"]) return NULL;
+            if ([lp containsString:@"libhooker"]) return NULL;
+            if ([lp containsString:@"libellekit"]) return NULL;
+            if ([lp containsString:@"tweakinject"]) return NULL;
+            if ([lp containsString:@"choma"]) return NULL;
+            if ([lp containsString:@"cycript"]) return NULL;
+            if ([lp containsString:@"frida"]) return NULL;
+            if ([lp containsString:@"libcolorpicker"]) return NULL;
         }
     }
     return orig_dlopen(path, mode);
@@ -194,7 +256,7 @@ static void *hook_dlopen(const char *path, int mode) {
     if ([path isEqualToString:@"/"] || [path isEqualToString:@"/Applications"]) {
         NSMutableArray *clean = [orig mutableCopy];
         [clean removeObject:@"Cydia.app"];
-        [clean removeObject:@"Sileo.app"];     // скрываем от целевого приложения
+        [clean removeObject:@"Sileo.app"];
         [clean removeObject:@".installed_unc0ver"];
         [clean removeObject:@".bootstrapped_electra"];
         return clean;
@@ -213,7 +275,6 @@ static void *hook_dlopen(const char *path, int mode) {
         if ([scheme isEqualToString:@"cydia"]) return NO;
         if ([scheme isEqualToString:@"sileo"]) return NO;
         if ([scheme isEqualToString:@"zbra"]) return NO;
-        // ИСПРАВЛЕНИЕ: filza НЕ убиваем — это нужный инструмент
         if ([scheme isEqualToString:@"undecimus"]) return NO;
         if ([scheme isEqualToString:@"activator"]) return NO;
         if ([scheme isEqualToString:@"apt-repo"]) return NO;
@@ -232,13 +293,8 @@ static void *hook_dlopen(const char *path, int mode) {
         NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
         if (!bid) return;
 
-        // ИСПРАВЛЕНИЕ: bypass активируем ТОЛЬКО для перечисленных bundle ID.
-        // com.apple.* — никогда не трогаем.
-        // Sileo, Filza, Chrome — не в списке => bypass НЕ активируется => они работают.
-
         if ([bid hasPrefix:@"com.apple."]) return;
 
-        // Только приложения из списка — никакого fallback
         NSArray *targets = _jb_targetBundles();
         _jb_shouldBypass = [targets containsObject:bid];
 
@@ -247,16 +303,18 @@ static void *hook_dlopen(const char *path, int mode) {
             return;
         }
 
-        // Устанавливаем syscall хуки
         MSHookFunction((void *)stat,     (void *)hook_stat,     (void **)&orig_stat);
         MSHookFunction((void *)lstat,    (void *)hook_lstat,    (void **)&orig_lstat);
         MSHookFunction((void *)access,   (void *)hook_access,   (void **)&orig_access);
         MSHookFunction((void *)open,     (void *)hook_open,     (void **)&orig_open);
         MSHookFunction((void *)fopen,    (void *)hook_fopen,    (void **)&orig_fopen);
         MSHookFunction((void *)opendir,  (void *)hook_opendir,  (void **)&orig_opendir);
-        // fork НЕ хукаем — убивал Chrome/WKWebView
         MSHookFunction((void *)getenv,   (void *)hook_getenv,   (void **)&orig_getenv);
         MSHookFunction((void *)dlopen,   (void *)hook_dlopen,   (void **)&orig_dlopen);
+        // FIX 2: дополнительные хуки для PayPal и др.
+        MSHookFunction((void *)dlsym,    (void *)hook_dlsym,    (void **)&orig_dlsym);
+        MSHookFunction((void *)readlink, (void *)hook_readlink, (void **)&orig_readlink);
+        MSHookFunction((void *)statfs,   (void *)hook_statfs,   (void **)&orig_statfs);
 
         %init;
         NSLog(@"[MPU/JBBypass] Active for: %@", bid);
