@@ -1,4 +1,4 @@
-// BrowserHooks.x - MediaPlaybackUtils v1.6.0
+// BrowserHooks.x - MediaPlaybackUtils v1.7.3
 // Перехват камеры в браузерных процессах (Safari/Chrome/Brave/Edge/Firefox)
 //
 // На iOS все браузеры используют WebKit → камера реально живёт в
@@ -20,7 +20,6 @@ static dispatch_source_t _brw_timer = nil;
 // ── проверка: интересный ли это класс для браузера ──────────────────────────
 static BOOL _brw_isInterestingClass(NSString *n) {
     if (!n) return NO;
-    // Все известные паттерны WebKit/WebRTC/Chrome-IOS делегатов кадров
     return ([n containsString:@"WebCore"] ||
             [n containsString:@"WebRTC"] ||
             [n containsString:@"WKVideoCapture"] ||
@@ -137,8 +136,6 @@ static void _brw_scan(void) {
 }
 
 // ── periodic rescan: WebKit классы появляются ПОЗЖЕ старта процесса ─────────
-// При getUserMedia() WebKit подгружает WebCore-классы по требованию.
-// Опрашиваем каждые 2 секунды первые 60 сек, потом каждые 10 сек.
 static void _brw_startPeriodicScan(void) {
     dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
     _brw_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
@@ -148,7 +145,7 @@ static void _brw_startPeriodicScan(void) {
     dispatch_source_set_event_handler(_brw_timer, ^{
         _brw_scan();
         ticks++;
-        if (ticks == 30) { // через ~60 сек переводим в редкий режим
+        if (ticks == 30) {
             dispatch_source_set_timer(_brw_timer, DISPATCH_TIME_NOW,
                                       10 * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
         }
@@ -156,7 +153,7 @@ static void _brw_startPeriodicScan(void) {
     dispatch_resume(_brw_timer);
 }
 
-// ── ХУК AVCaptureSession.startRunning — триггерим скан при первом старте ────
+// ── ХУК AVCaptureSession.startRunning ────────────────────────────────────────
 %hook AVCaptureSession
 - (void)startRunning {
     %orig;
@@ -169,10 +166,9 @@ static void _brw_startPeriodicScan(void) {
 %end
 
 // ── ИНИЦИАЛИЗАЦИЯ ───────────────────────────────────────────────────────────
-// Разрешаем загрузку ТОЛЬКО в браузерных/WebKit процессах
 static BOOL _brw_isBrowserProcess(NSString *bid) {
     if (!bid) return NO;
-    return ([bid hasPrefix:@"com.apple.WebKit"] ||      // GPU, WebContent, Networking
+    return ([bid hasPrefix:@"com.apple.WebKit"] ||
             [bid hasPrefix:@"com.apple.mobilesafari"] ||
             [bid hasPrefix:@"com.google.chrome"] ||
             [bid hasPrefix:@"com.brave.ios"] ||
@@ -190,19 +186,16 @@ static BOOL _brw_isBrowserProcess(NSString *bid) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
-        // ЭТОТ файл — ТОЛЬКО для браузеров. В Telegram/Camera работает Tweak.x
         if (!_brw_isBrowserProcess(bid)) return;
 
-        // ВАЖНО: com.apple.WebKit.GPU / WebContent / Networking физически живут в
+        // FIX: com.apple.WebKit.GPU / WebContent / Networking физически живут в
         // /System/Library/Frameworks/WebKit.framework/XPCServices/ — НЕ скипаем их.
-        // Скипаем только /usr/, остальные WebKit-процессы должны загрузиться.
         if ([path hasPrefix:@"/usr/"]) return;
 
         _brw_hooked = [NSMutableSet new];
         %init;
         NSLog(@"[MPU/Browser] Loaded for %@", bid);
 
-        // первичный скан через 0.5 сек
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
                        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             _brw_scan();
