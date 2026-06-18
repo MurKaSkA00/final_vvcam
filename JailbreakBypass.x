@@ -1,4 +1,4 @@
-// JailbreakBypass.x - MediaPlaybackUtils v1.7.3
+// JailbreakBypass.x - MediaPlaybackUtils v1.7.4
 // Скрывает джейлбрейк ТОЛЬКО от конкретных целевых приложений.
 // НЕ убивает Sileo, Filza, palera1n, Chrome.
 
@@ -169,17 +169,25 @@ static char *hook_getenv(const char *name) {
 }
 
 // FIX 2: dlsym — PayPal SDK дёргает dlsym(RTLD_DEFAULT, "MSHookFunction") и аналоги.
+// Внимание: используем точное strcmp по чёрному списку. strstr() ловил легитимные
+// символы PayPal SDK с подстрокой "_logos_" и роняло приложение на старте.
+static const char *_jb_dlsym_blacklist[] = {
+    "MSHookFunction",
+    "MSHookMessageEx",
+    "MSGetImageByName",
+    "MSFindSymbol",
+    "LHHookFunctions",
+    "SubHookFunction",
+    "EKHook",
+    NULL
+};
+
 static void *(*orig_dlsym)(void *, const char *);
 static void *hook_dlsym(void *handle, const char *symbol) {
     if (_jb_shouldBypass && symbol) {
-        if (strstr(symbol, "MSHookFunction"))     return NULL;
-        if (strstr(symbol, "MSHookMessageEx"))    return NULL;
-        if (strstr(symbol, "MSGetImageByName"))   return NULL;
-        if (strstr(symbol, "MSFindSymbol"))       return NULL;
-        if (strstr(symbol, "LHHookFunctions"))    return NULL;
-        if (strstr(symbol, "SubHookFunction"))    return NULL;
-        if (strstr(symbol, "EKHook"))             return NULL;
-        if (strstr(symbol, "_logos_"))            return NULL;
+        for (int i = 0; _jb_dlsym_blacklist[i]; i++) {
+            if (strcmp(symbol, _jb_dlsym_blacklist[i]) == 0) return NULL;
+        }
     }
     return orig_dlsym(handle, symbol);
 }
@@ -191,40 +199,40 @@ static ssize_t hook_readlink(const char *path, char *buf, size_t bufsize) {
     return orig_readlink(path, buf, bufsize);
 }
 
-// FIX 2: statfs — PayPal проверяет writable root через MNT_RDONLY.
+// FIX 2: statfs — раньше форсировали MNT_RDONLY для "/". На современном rootless
+// iOS 16+ ядро уже возвращает root как RO, а на checkra1n/dopamine это могло
+// конфликтовать с проверками PayPal-SDK (приложение падало после первой проверки).
+// Оставлено как no-op, чтобы при необходимости легко вернуть поведение.
 static int (*orig_statfs)(const char *, struct statfs *);
 static int hook_statfs(const char *path, struct statfs *buf) {
-    int r = orig_statfs(path, buf);
-    if (_jb_shouldBypass && r == 0 && buf && path) {
-        if (strcmp(path, "/") == 0) {
-            buf->f_flags |= MNT_RDONLY;
-        }
-    }
-    return r;
+    return orig_statfs(path, buf);
 }
 
-// FIX 2: dlopen — расширенный фильтр (containsString вместо hasSuffix).
+// FIX 2: dlopen — фильтр строго по basename / hasSuffix.
+// containsString() ловил случайные пути внутри PayPal.framework и приложение
+// падало на старте, потому что dlopen возвращал NULL для своих же фреймворков.
 static void *(*orig_dlopen)(const char *, int);
 static void *hook_dlopen(const char *path, int mode) {
     if (_jb_shouldBypass && path) {
         NSString *p = [NSString stringWithUTF8String:path];
         if (p) {
             NSString *lp = [p lowercaseString];
-            if ([lp hasSuffix:@"libsubstrate.dylib"]) return NULL;
-            if ([lp hasSuffix:@"libhooker.dylib"]) return NULL;
-            if ([lp hasSuffix:@"libellekit.dylib"]) return NULL;
-            if ([lp hasSuffix:@"libsubstitute.dylib"]) return NULL;
-            if ([lp hasSuffix:@"libroothideboot.dylib"]) return NULL;
-            if ([lp containsString:@"mobilesubstrate"]) return NULL;
-            if ([lp containsString:@"substrate"]) return NULL;
-            if ([lp containsString:@"substitute"]) return NULL;
-            if ([lp containsString:@"libhooker"]) return NULL;
-            if ([lp containsString:@"libellekit"]) return NULL;
-            if ([lp containsString:@"tweakinject"]) return NULL;
-            if ([lp containsString:@"choma"]) return NULL;
-            if ([lp containsString:@"cycript"]) return NULL;
-            if ([lp containsString:@"frida"]) return NULL;
-            if ([lp containsString:@"libcolorpicker"]) return NULL;
+            NSString *base = [lp lastPathComponent];
+            // точное имя dylib
+            if ([base isEqualToString:@"libsubstrate.dylib"]) return NULL;
+            if ([base isEqualToString:@"libhooker.dylib"]) return NULL;
+            if ([base isEqualToString:@"libellekit.dylib"]) return NULL;
+            if ([base isEqualToString:@"libsubstitute.dylib"]) return NULL;
+            if ([base isEqualToString:@"libroothideboot.dylib"]) return NULL;
+            if ([base isEqualToString:@"cydiasubstrate"]) return NULL;
+            if ([base isEqualToString:@"substrate"]) return NULL;
+            if ([base isEqualToString:@"substitute"]) return NULL;
+            if ([base isEqualToString:@"libcycript.dylib"]) return NULL;
+            if ([base isEqualToString:@"libfrida-gadget.dylib"]) return NULL;
+            // точные framework-пути
+            if ([lp hasSuffix:@"/cydiasubstrate.framework/cydiasubstrate"]) return NULL;
+            if ([lp hasSuffix:@"/mobilesubstrate.dylib"]) return NULL;
+            if ([lp hasSuffix:@"/tweakinject.dylib"]) return NULL;
         }
     }
     return orig_dlopen(path, mode);
