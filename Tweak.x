@@ -481,23 +481,30 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
 // ── ИНИЦИАЛИЗАЦИЯ ────────────────────────────────────────────────────────────
 %ctor {
     @autoreleasepool {
-        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
-        NSString *path = [[NSBundle mainBundle] bundlePath];
-        if (!bid) return;
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
         if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
         if ([bid hasPrefix:@"com.apple.coremedia"]) return;
         if ([bid hasPrefix:@"com.apple.avconferenced"]) return;
-        // FIX: НЕ скипаем com.apple.WebKit.* — там живёт камера Safari/Chrome (getUserMedia).
-        BOOL isWebKit = [bid hasPrefix:@"com.apple.WebKit"];
-        if ([path hasPrefix:@"/usr/"]) return;
-        if (!isWebKit && [path hasPrefix:@"/System/Library/"]) return;
 
-        _v_lock = [NSObject new];
-        _v_ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer: @NO}];
-        _v_loadPrefs();
+        // FIX: WebKit/Safari/Chrome/Brave/Edge/Firefox/Opera/DDG/Kagi.
+        // BrowserHooks.x в проекте отсутствует, поэтому здесь камеру в
+        // браузерах не хукаем вообще — иначе валится WebKit GPU
+        // ("Эта веб-страница была перезагружена из-за возникшей ошибки").
+        if ([bid hasPrefix:@"com.apple.WebKit"])       return;
+        if ([bid hasPrefix:@"com.apple.mobilesafari"]) return;
+        if ([bid hasPrefix:@"com.google.chrome"])      return;
+        if ([bid hasPrefix:@"com.brave.ios"])          return;
+        if ([bid hasPrefix:@"com.opera"])              return;
+        if ([bid hasPrefix:@"com.microsoft.msedge"])   return;
+        if ([bid hasPrefix:@"com.firefox.ios"])        return;
+        if ([bid hasPrefix:@"org.mozilla.ios"])        return;
+        if ([bid hasPrefix:@"com.ddg.ios"])            return;
+        if ([bid hasPrefix:@"com.kagi"])               return;
+
+        if ([path hasPrefix:@"/usr/"]) return;
+        if ([path hasPrefix:@"/System/Library/"]) return;
 
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(), NULL, _v_prefsChanged,
