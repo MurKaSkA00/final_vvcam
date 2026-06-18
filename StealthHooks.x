@@ -66,8 +66,6 @@ static uint32_t _filtered_to_real[2048];
 static uint32_t _filtered_count = 0;
 static os_unfair_lock _filter_lock = OS_UNFAIR_LOCK_INIT;
 
-// FIX: пересобираем фильтр при каждом вызове — новые dylib (стрим, substrate)
-//      загружаются позже и dispatch_once их не захватывал
 static void _stealth_rebuild_filter(void) {
     os_unfair_lock_lock(&_filter_lock);
     uint32_t real = orig_dyld_image_count();
@@ -234,6 +232,12 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
         NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
+
+        // FIX: PayPal SDK сам ходит по _dyld_image_* и NSBundle.allBundles.
+        // Подмена этих API ломает PAC/CRC-проверки PayPal и роняет приложение
+        // на запуске. Для PayPal анти-джейл даёт JailbreakBypass.x.
+        if ([bid hasPrefix:@"com.paypal."]) return;
+
         if ([bid hasPrefix:@"com.apple."]) return;
         if ([path hasPrefix:@"/usr/"]) return;
         if ([path hasPrefix:@"/System/"]) return;
