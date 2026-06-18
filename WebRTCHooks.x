@@ -1,6 +1,5 @@
-// WebRTCHooks.x - MediaPlaybackUtils v1.6.0
+// WebRTCHooks.x - MediaPlaybackUtils v1.7.3
 // Перехват WebRTC камеры — Safari, Chrome, FaceTime
-// FIX: использует SharedState.h, убран фильтр "_" по префиксу
 
 #import <Foundation/Foundation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -61,7 +60,6 @@ static void _webrtc_hookClass(Class cls) {
         if (CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, src, &fmt) == noErr && fmt) {
             CMSampleBufferRef rep = NULL;
             if (CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, src, fmt, &timing, &rep) == noErr && rep) {
-                // копируем attachments с оригинала
                 if (sb) {
                     CFDictionaryRef att = CMCopyDictionaryOfAttachments(kCFAllocatorDefault, sb,
                                                                        kCMAttachmentMode_ShouldPropagate);
@@ -112,7 +110,6 @@ static void _webrtc_scanAllClasses(void) {
         if (!class_getInstanceMethod(cls, sel)) continue;
         NSString *name = NSStringFromClass(cls);
         if (!name) continue;
-        // НЕ пропускаем "_" — WebRTC классы (_RTCCameraVideoCapturer и т. п.) идут с подчёркивания
         _webrtc_hookClass(cls);
     }
     free(classes);
@@ -148,7 +145,11 @@ static void _webrtc_scanAllClasses(void) {
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
         if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
-        if ([path hasPrefix:@"/usr/"] || [path hasPrefix:@"/System/Library/"]) return;
+        // FIX: НЕ скипаем com.apple.WebKit.* — их XPCServices живут в /System/Library/.
+        // Без этого браузерный getUserMedia (webcammictest и пр.) не перехватывается.
+        BOOL isWebKit = [bid hasPrefix:@"com.apple.WebKit"];
+        if ([path hasPrefix:@"/usr/"]) return;
+        if (!isWebKit && [path hasPrefix:@"/System/Library/"]) return;
 
         _webrtc_hooked = [NSMutableSet new];
         %init;
