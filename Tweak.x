@@ -125,9 +125,7 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
 
     if (s != noErr || !out) return NULL;
 
-    // ── КОПИРУЕМ ATTACHMENTS С ОРИГИНАЛА (это видит антифрод) ──
     if (original) {
-        // 1. sample attachments array (per-sample: DependsOnOthers, NotSync, etc.)
         CFArrayRef srcArr = CMSampleBufferGetSampleAttachmentsArray(original, false);
         if (srcArr && CFArrayGetCount(srcArr) > 0) {
             CFArrayRef dstArr = CMSampleBufferGetSampleAttachmentsArray(out, true);
@@ -148,7 +146,6 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
                 }
             }
         }
-        // 2. buffer-level attachments (ISP-info, lens, focus, exposure...)
         CFDictionaryRef bufAtt = CMCopyDictionaryOfAttachments(kCFAllocatorDefault,
                                                                 original,
                                                                 kCMAttachmentMode_ShouldPropagate);
@@ -185,9 +182,6 @@ static NSData *_v_jpegFromBuffer(CVPixelBufferRef buffer) {
     return d;
 }
 
-// ── helpers: нужно ли пропустить класс ───────────────────────────────────────
-// Раньше отсекали по префиксу "_"/"RCT"/"WK" — это рубило WebRTC/RN/WebKit.
-// Теперь — точечный чёрный список.
 static BOOL _v_shouldSkipClass(NSString *clsName) {
     if (!clsName) return YES;
     static NSArray *blacklist;
@@ -359,7 +353,6 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
     CALayer *overlay = objc_getAssociatedObject(self, "_v_overlay");
     if (!overlay) return;
 
-    // === КОРОТКИЙ лок: только дёрнуть retain буфера ===
     CVPixelBufferRef bufCopy = NULL;
     CFTimeInterval bufTime   = 0;
     BOOL switching;
@@ -378,7 +371,6 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         return;
     }
 
-    // soft-restart: порог 10s, без stopStreaming (просто reconnect)
     CFTimeInterval age = CACurrentMediaTime() - bufTime;
     if (!switching && bufTime > 0 && age > 10.0) {
         _isSwitching = YES;
@@ -398,7 +390,6 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         return;
     }
 
-    // fallback CGImage в фоне
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         CIImage *ci = [CIImage imageWithCVPixelBuffer:bufCopy];
         if (ci && _v_ciContext) {
@@ -485,6 +476,10 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
+        // FIX: PayPal — отключаем AV-swizzle до отдельного KYC-хука,
+        // общий хук валит приложение на запуске.
+        if ([bid hasPrefix:@"com.paypal."]) return;
+
         if ([bid hasPrefix:@"com.apple.springboard"])     return;
         if ([bid hasPrefix:@"com.apple.mediaserverd"])    return;
         if ([bid hasPrefix:@"com.apple.assetsd"])         return;
@@ -525,4 +520,3 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         }
     }
 }
-
