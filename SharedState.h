@@ -1,4 +1,3 @@
-1. SharedState.h
 // SharedState.h - MediaPlaybackUtils v1.7.6
 // Общие переменные между Tweak.x / WebRTCHooks.x / BrowserHooks.x / AntifraudHooks.x
 #ifndef SHARED_STATE_H
