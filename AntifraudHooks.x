@@ -1,10 +1,24 @@
-// AntifraudHooks.x - MediaPlaybackUtils v1.7.6
+// AntifraudHooks.x - MediaPlaybackUtils v1.7.7
 // FIX 3:
 //   - PayPal bundle id (com.yourcompany.PPClient -> com.paypal.PPClient).
 //   - isFocusPointOfInterestSupported / isExposurePointOfInterestSupported /
 //     isFlashAvailable / isTorchAvailable БОЛЬШЕ НЕ возвращают безусловно YES.
 //     Раньше это ломало Instagram/Snapchat: они пытались реально включить
 //     torch на устройствах без него -> NSInvalidArgumentException -> крах.
+// FIX 4 (v1.7.7) — остаточные launch-crash'и в Instagram / Snapchat / TikTok /
+// банковских приложениях, не исправленные FIX 3:
+//   - hasMediaType: больше не возвращает безусловно YES для AVMediaTypeVideo.
+//     Раньше это превращало микрофон и любые audio/external-устройства в
+//     "видео-устройства". При итерации AVCaptureDevice.devices приложение
+//     создавало AVCaptureDeviceInput с audio-устройством как video-source ->
+//     nil + NSException -> краш при запуске камеры.
+//   - position: больше не подменяет Unspecified на Back для ВСЕХ устройств.
+//     Микрофоны/внешние устройства легитимно Unspecified — насильственный
+//     Back ломал FSM AVCaptureSession в Instagram/Snapchat (краш на
+//     -[AVCaptureSession addInput:]).
+//   - localizedName: убрана подстрока "Media" из чёрного списка — она
+//     совпадала со штатными системными именами и подменяла их на
+//     "Back Camera", путая Instagram и сканеры.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -32,9 +46,11 @@ static NSString *hook_NSStringFromClass(Class cls) {
 - (NSString *)localizedName {
     NSString *name = %orig;
     if (!name) return name;
+    // FIX 4: убрана подстрока "Media" — слишком широкая, ломала
+    // легитимные имена системных устройств.
     if ([name containsString:@"MPU"] || [name containsString:@"Virtual"] ||
         [name containsString:@"Stream"] || [name containsString:@"Tweak"] ||
-        [name containsString:@"Proxima"] || [name containsString:@"Media"]) {
+        [name containsString:@"Proxima"]) {
         return @"Back Camera";
     }
     return name;
@@ -51,7 +67,10 @@ static NSString *hook_NSStringFromClass(Class cls) {
 
 - (AVCaptureDevicePosition)position {
     AVCaptureDevicePosition p = %orig;
-    if (p == AVCaptureDevicePositionUnspecified) return AVCaptureDevicePositionBack;
+    // FIX 4: НЕ подменяем Unspecified на Back для всех устройств подряд.
+    // Audio-устройства (микрофоны) и external accessories легитимно
+    // возвращают Unspecified. Принудительный Back ломал AVCaptureSession
+    // в Instagram/Snapchat -> краш на старте захвата.
     return p;
 }
 
@@ -70,7 +89,13 @@ static NSString *hook_NSStringFromClass(Class cls) {
 // где это реально не поддерживалось -> необработанное исключение -> краш.
 
 - (BOOL)hasMediaType:(AVMediaType)mediaType {
-    if ([mediaType isEqualToString:AVMediaTypeVideo]) return YES;
+    // FIX 4: больше не врём про hasMediaType:. Раньше безусловный YES для
+    // AVMediaTypeVideo превращал микрофон в "видео-устройство". Приложение
+    // пыталось сделать AVCaptureDeviceInput.deviceInputWithDevice: с
+    // audio-устройством как видео-источником -> nil + NSException на
+    // -[AVCaptureSession addInput:] -> краш при запуске камеры.
+    // Настоящие камеры и так корректно возвращают YES для AVMediaTypeVideo,
+    // поэтому подмена не нужна и только ломает приложения.
     return %orig;
 }
 
