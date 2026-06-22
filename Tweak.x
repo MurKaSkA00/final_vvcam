@@ -490,11 +490,6 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
-        // FIX 3: реальный bundle PayPal — com.paypal.PPClient
-        // (НЕ com.yourcompany.PPClient — это шаблон Theos!).
-        if ([bid isEqualToString:@"com.paypal.PPClient"]) return;
-        if ([bid hasPrefix:@"com.paypal."]) return;
-
         if ([bid hasPrefix:@"com.apple.springboard"])     return;
         if ([bid hasPrefix:@"com.apple.mediaserverd"])    return;
         if ([bid hasPrefix:@"com.apple.assetsd"])         return;
