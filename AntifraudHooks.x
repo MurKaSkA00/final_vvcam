@@ -1,4 +1,4 @@
-// AntifraudHooks.x - MediaPlaybackUtils v2.0.2
+// AntifraudHooks.x - MediaPlaybackUtils v1.7.5
 // FIX: использует SharedState.h
 
 #import <Foundation/Foundation.h>
@@ -141,6 +141,9 @@ static NSString *hook_NSStringFromClass(Class cls) {
         // NSStringFromClass / NSUserDefaults objectForKey: подменяются через
         // dispatch_async — PayPal SDK в этот момент уже на середине запуска,
         // подмена ломает кэш классов и приложение мгновенно закрывается.
+        // Реальный bundle PayPal — com.yourcompany.PPClient. Префикс com.paypal.
+        // оставлен на случай dev/QA-сборок.
+        if ([bid isEqualToString:@"com.yourcompany.PPClient"]) return;
         if ([bid hasPrefix:@"com.paypal."]) return;
 
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
