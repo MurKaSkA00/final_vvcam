@@ -1,11 +1,14 @@
-// Tweak.x - MediaPlaybackUtils v1.7.5
-// FIX:
-//  - убран static у _enabled/_lastBuffer/_v_lock (линковка с другими .x)
-//  - убран фильтр по префиксам _/RCT/WK (он рубил WebRTC/RN/WebKit-классы)
-//  - сужен @synchronized(_v_lock): только над _lastBuffer
-//  - порог рестарта поднят с 2s до 10s + soft-restart (без stop)
-//  - CMSampleBuffer attachments копируются с оригинала (антифрод видит metadata)
-//  - добавлен %hook AVSampleBufferDisplayLayer (фильтры / WebRTC preview)
+// Tweak.x - MediaPlaybackUtils v1.7.6
+// FIX 3:
+//   - PayPal bundle id: com.yourcompany.PPClient (Theos template) -> com.paypal.PPClient
+//   - enqueueSampleBuffer: CFRelease(rep) сразу после %orig вызывал
+//     use-after-free в AVSampleBufferDisplayLayer (асинхронный декодер).
+//     Заменено на CFAutorelease — буфер живёт до конца runloop tick.
+//   - _v_makeReplacementSampleBuffer: проверяем CFArrayGetCount(dstArr)>0
+//     перед CFArrayGetValueAtIndex(dstArr,0). Иначе segfault на новых
+//     sample buffers без samples.
+//   - shared _mpu_globalHookedClasses — больше нет двойного swizzle между
+//     Tweak.x / WebRTCHooks.x / BrowserHooks.x.
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -22,6 +25,10 @@ BOOL              _enabled        = YES;
 CVPixelBufferRef  _lastBuffer     = NULL;
 id                _v_lock         = nil;
 CFTimeInterval    _lastBufferTime = 0;
+
+// FIX 3: общий набор свизленных классов
+NSMutableSet     *_mpu_globalHookedClasses = nil;
+id                _mpu_globalHookedLock    = nil;
 
 // === ЛОКАЛЬНОЕ ===
 static NSString             *_url             = @"http://192.168.1.44:8888/live/stream/index.m3u8";
@@ -129,19 +136,25 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
         CFArrayRef srcArr = CMSampleBufferGetSampleAttachmentsArray(original, false);
         if (srcArr && CFArrayGetCount(srcArr) > 0) {
             CFArrayRef dstArr = CMSampleBufferGetSampleAttachmentsArray(out, true);
+            // FIX 3: dstArr может быть пустым для нового sample buffer — проверяем count
             if (dstArr && CFArrayGetCount(dstArr) > 0) {
                 CFDictionaryRef srcDict = CFArrayGetValueAtIndex(srcArr, 0);
                 CFMutableDictionaryRef dstDict =
                     (CFMutableDictionaryRef)CFArrayGetValueAtIndex(dstArr, 0);
-                if (srcDict && dstDict) {
+                if (srcDict && dstDict &&
+                    CFGetTypeID(srcDict) == CFDictionaryGetTypeID() &&
+                    CFGetTypeID(dstDict) == CFDictionaryGetTypeID()) {
                     CFIndex n = CFDictionaryGetCount(srcDict);
                     if (n > 0) {
                         const void **keys = malloc(sizeof(void *) * n);
                         const void **vals = malloc(sizeof(void *) * n);
-                        CFDictionaryGetKeysAndValues(srcDict, keys, vals);
-                        for (CFIndex i = 0; i < n; i++)
-                            CFDictionarySetValue(dstDict, keys[i], vals[i]);
-                        free(keys); free(vals);
+                        if (keys && vals) {
+                            CFDictionaryGetKeysAndValues(srcDict, keys, vals);
+                            for (CFIndex i = 0; i < n; i++)
+                                CFDictionarySetValue(dstDict, keys[i], vals[i]);
+                        }
+                        if (keys) free(keys);
+                        if (vals) free(vals);
                     }
                 }
             }
@@ -205,10 +218,6 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
     if (!_enabled || !delegate) { %orig; return; }
     _v_init();
 
-    static NSMutableSet *swizzled = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ swizzled = [NSMutableSet new]; });
-
     Class cls = object_getClass(delegate);
     if (!cls) { %orig; return; }
 
@@ -217,8 +226,9 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
 
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
 
-    @synchronized(swizzled) {
-        if (![swizzled containsObject:clsName]) {
+    // FIX 3: общий lock + общий set с другими .x — никаких двойных swizzle
+    @synchronized(_mpu_globalHookedLock) {
+        if (![_mpu_globalHookedClasses containsObject:clsName]) {
             Method m = class_getInstanceMethod(cls, sel);
             if (m) {
                 const char *types = method_getTypeEncoding(m);
@@ -249,7 +259,7 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
                     IMP prev = class_replaceMethod(cls, sel, newIMP, types);
                     if (prev) capturedIMP = prev;
                 }
-                [swizzled addObject:clsName];
+                [_mpu_globalHookedClasses addObject:clsName];
                 NSLog(@"[MPU] Hooked delegate: %@", clsName);
             }
         }
@@ -423,7 +433,11 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
     CMSampleBufferRef rep = _v_makeReplacementSampleBuffer(sampleBuffer);
     if (rep) {
         %orig(rep);
-        CFRelease(rep);
+        // FIX 3: AVSampleBufferDisplayLayer декодирует асинхронно через
+        // VideoToolbox/GPU. Немедленный CFRelease(rep) приводил к
+        // use-after-free и крашу в mediaserverd / прямо в процессе.
+        // CFAutorelease даёт layer'у дочитать буфер до конца текущего tick.
+        CFAutorelease(rep);
         return;
     }
     %orig;
@@ -476,10 +490,9 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
-        // FIX: PayPal — отключаем AV-swizzle до отдельного KYC-хука,
-        // общий хук валит приложение на запуске.
-        // Реальный bundle PayPal в App Store — com.yourcompany.PPClient.
-        if ([bid isEqualToString:@"com.yourcompany.PPClient"]) return;
+        // FIX 3: реальный bundle PayPal — com.paypal.PPClient
+        // (НЕ com.yourcompany.PPClient — это шаблон Theos!).
+        if ([bid isEqualToString:@"com.paypal.PPClient"]) return;
         if ([bid hasPrefix:@"com.paypal."]) return;
 
         if ([bid hasPrefix:@"com.apple.springboard"])     return;
@@ -489,10 +502,6 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         if ([bid hasPrefix:@"com.apple.coremedia"])       return;
         if ([bid hasPrefix:@"com.apple.avconferenced"])   return;
 
-        // FIX: WebKit/Safari/Chrome/Brave/Edge/Firefox/Opera/DDG/Kagi.
-        // BrowserHooks.x в проекте отсутствует, поэтому здесь камеру в
-        // браузерах не хукаем вообще — иначе валится WebKit GPU
-        // ("Эта веб-страница была перезагружена из-за возникшей ошибки").
         if ([bid hasPrefix:@"com.apple.WebKit"])       return;
         if ([bid hasPrefix:@"com.apple.mobilesafari"]) return;
         if ([bid hasPrefix:@"com.google.chrome"])      return;
@@ -508,6 +517,10 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         if ([path hasPrefix:@"/System/Library/"]) return;
 
         _v_lock = [NSObject new];
+        // FIX 3: shared hooked set
+        _mpu_globalHookedClasses = [NSMutableSet new];
+        _mpu_globalHookedLock    = [NSObject new];
+
         _v_ciContext = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer: @NO}];
         _v_loadPrefs();
 
