@@ -80,7 +80,11 @@
             <string>com.okcupid.okcupid</string>
 
             <!-- Банки -->
-            <string>com.paypal.www</string>
+            <!-- FIX: реальный bundle PayPal в App Store — com.yourcompany.PPClient,
+                 (см. apple-app-site-association на paypal.com). Раньше тут стоял
+                 несуществующий com.paypal.www, поэтому твик грузился не в тот
+                 процесс, а в реальном PayPal не было ни Bypass, ни safe-return. -->
+            <string>com.yourcompany.PPClient</string>
             <string>com.venmo.Venmo</string>
             <string>com.cashapp.squarecash</string>
             <string>com.konylabs.westernunion</string>
