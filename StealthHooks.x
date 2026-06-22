@@ -1,4 +1,4 @@
-// StealthHooks.x - MediaPlaybackUtils v2.0.1
+// StealthHooks.x - MediaPlaybackUtils v1.7.5
 // Полное скрытие твика из памяти процесса
 // FIX: _stealth_rebuild_filter больше не dispatch_once — фильтр пересобирается
 //      каждый раз, иначе образы загруженные после первого вызова не скрывались
@@ -236,6 +236,8 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
         // FIX: PayPal SDK сам ходит по _dyld_image_* и NSBundle.allBundles.
         // Подмена этих API ломает PAC/CRC-проверки PayPal и роняет приложение
         // на запуске. Для PayPal анти-джейл даёт JailbreakBypass.x.
+        // Реальный bundle PayPal — com.yourcompany.PPClient.
+        if ([bid isEqualToString:@"com.yourcompany.PPClient"]) return;
         if ([bid hasPrefix:@"com.paypal."]) return;
 
         if ([bid hasPrefix:@"com.apple."]) return;
