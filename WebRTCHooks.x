@@ -1,4 +1,4 @@
-// WebRTCHooks.x - MediaPlaybackUtils v1.7.4
+// WebRTCHooks.x - MediaPlaybackUtils v1.7.5
 // Перехват WebRTC камеры — нативные приложения (FaceTime, Zoom, Skype, и т.п.).
 // В Safari/Chrome/Brave работу с камерой берёт на себя BrowserHooks.x — два .x
 // в одном WebKit-процессе хукали одни и те же классы и ломали getUserMedia.
@@ -174,6 +174,13 @@ static void _webrtc_scanAllClasses(void) {
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
         if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
+        // FIX: PayPal — пропускаем objc_copyClassList / swizzle.
+        // PayPal SDK периодически сканирует ObjC-runtime, любые добавленные
+        // IMP через imp_implementationWithBlock детектятся как tampering,
+        // приложение убивает само себя через ~5 сек после login. Антифрод
+        // для PayPal обеспечивается только JailbreakBypass.x (syscall-уровень).
+        if ([bid isEqualToString:@"com.yourcompany.PPClient"]) return;
+        if ([bid hasPrefix:@"com.paypal."]) return;
         // FIX: в WebKit/Safari/Chrome пайплайн камеры обрабатывает BrowserHooks.x.
         // Двойной хук на одни и те же классы из двух .x ломал webcammictest
         // и getUserMedia в браузерах.
@@ -188,14 +195,13 @@ static void _webrtc_scanAllClasses(void) {
         if ([bid hasPrefix:@"com.ddg.ios"])            return;
         if ([bid hasPrefix:@"com.kagi"])               return;
         if ([path hasPrefix:@"/usr/"]) return;
-        if ([path hasPrefix:@"/System/Library/"]) return;
 
         _webrtc_hooked = [NSMutableSet new];
         %init;
         NSLog(@"[MPU/WebRTC] Loaded for %@", bid);
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
+                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             if (_enabled) _webrtc_scanAllClasses();
         });
     }
