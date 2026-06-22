@@ -1,4 +1,4 @@
-// Tweak.x - MediaPlaybackUtils v1.6.0
+// Tweak.x - MediaPlaybackUtils v1.7.5
 // FIX:
 //  - убран static у _enabled/_lastBuffer/_v_lock (линковка с другими .x)
 //  - убран фильтр по префиксам _/RCT/WK (он рубил WebRTC/RN/WebKit-классы)
@@ -478,6 +478,8 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
 
         // FIX: PayPal — отключаем AV-swizzle до отдельного KYC-хука,
         // общий хук валит приложение на запуске.
+        // Реальный bundle PayPal в App Store — com.yourcompany.PPClient.
+        if ([bid isEqualToString:@"com.yourcompany.PPClient"]) return;
         if ([bid hasPrefix:@"com.paypal."]) return;
 
         if ([bid hasPrefix:@"com.apple.springboard"])     return;
