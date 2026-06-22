@@ -144,10 +144,6 @@ static NSString *hook_NSStringFromClass(Class cls) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
-        // FIX 3: реальный bundle PayPal — com.paypal.PPClient.
-        if ([bid isEqualToString:@"com.paypal.PPClient"]) return;
-        if ([bid hasPrefix:@"com.paypal."]) return;
-
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
         if ([path hasPrefix:@"/usr/"]) return;
         if ([path hasPrefix:@"/System/"]) return;
