@@ -1,7 +1,5 @@
-// StealthHooks.x - MediaPlaybackUtils v1.7.5
-// Полное скрытие твика из памяти процесса
-// FIX: _stealth_rebuild_filter больше не dispatch_once — фильтр пересобирается
-//      каждый раз, иначе образы загруженные после первого вызова не скрывались
+// StealthHooks.x - MediaPlaybackUtils v1.7.6
+// FIX 3: PayPal bundle id (com.yourcompany.PPClient -> com.paypal.PPClient).
 
 #import <Foundation/Foundation.h>
 #import <substrate.h>
@@ -54,8 +52,6 @@ static BOOL _stealth_should_hide_image(const char *name) {
     if (strstr(name, "JailbreakBypass"))    return YES;
     return NO;
 }
-
-// ── dyld image список ─────────────────────────────────────────────────────────
 
 static uint32_t (*orig_dyld_image_count)(void);
 static const char *(*orig_dyld_get_image_name)(uint32_t);
@@ -116,8 +112,6 @@ static intptr_t hook_dyld_get_image_vmaddr_slide(uint32_t idx) {
     return orig_dyld_get_image_vmaddr_slide(real_idx);
 }
 
-// ── dladdr — скрываем адреса наших функций ───────────────────────────────────
-
 static int (*orig_dladdr)(const void *, Dl_info *);
 
 static int hook_dladdr(const void *addr, Dl_info *info) {
@@ -130,8 +124,6 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
     }
     return r;
 }
-
-// ── NSString чтение файлов — скрываем пути твика ─────────────────────────────
 
 %hook NSString
 
@@ -167,8 +159,6 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
 
 %end
 
-// ── NSBundle — скрываем наши бандлы ──────────────────────────────────────────
-
 %hook NSBundle
 
 + (NSArray<NSBundle *> *)allBundles {
@@ -200,8 +190,6 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
 
 %end
 
-// ── NSData — блокируем чтение бинарников твика ───────────────────────────────
-
 %hook NSData
 
 + (instancetype)dataWithContentsOfFile:(NSString *)path {
@@ -225,19 +213,14 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
 
 %end
 
-// ── ИНИЦИАЛИЗАЦИЯ ─────────────────────────────────────────────────────────────
-
 %ctor {
     @autoreleasepool {
         NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
-        // FIX: PayPal SDK сам ходит по _dyld_image_* и NSBundle.allBundles.
-        // Подмена этих API ломает PAC/CRC-проверки PayPal и роняет приложение
-        // на запуске. Для PayPal анти-джейл даёт JailbreakBypass.x.
-        // Реальный bundle PayPal — com.yourcompany.PPClient.
-        if ([bid isEqualToString:@"com.yourcompany.PPClient"]) return;
+        // FIX 3: реальный bundle PayPal — com.paypal.PPClient.
+        if ([bid isEqualToString:@"com.paypal.PPClient"]) return;
         if ([bid hasPrefix:@"com.paypal."]) return;
 
         if ([bid hasPrefix:@"com.apple."]) return;
