@@ -1,6 +1,10 @@
-// JailbreakBypass.x - MediaPlaybackUtils v1.7.5
-// Скрывает джейлбрейк ТОЛЬКО от конкретных целевых приложений.
-// НЕ убивает Sileo, Filza, palera1n, Chrome.
+// JailbreakBypass.x - MediaPlaybackUtils v1.7.6
+// FIX 3:
+//   - PayPal bundle id (com.yourcompany.PPClient -> com.paypal.PPClient).
+//   - _path_is_blacklisted переписан на чистые C-строки (strcmp/strlen) БЕЗ NSString.
+//     Раньше из хуков open()/stat()/fopen() вызывался [NSString stringWithUTF8String:]
+//     + [NSString hasPrefix:], а NSString сам дёргает open() для локалей -> рекурсия
+//     -> stack overflow -> краш на запуске.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -15,23 +19,17 @@
 #import <stdio.h>
 #import <string.h>
 #import <errno.h>
+#import <stdlib.h>
 
-// ========================================
-// СПИСОК ПРИЛОЖЕНИЙ, от которых скрываем джейл.
-// ========================================
 static NSArray<NSString *> *_jb_targetBundles(void) {
     static NSArray *list = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         list = @[
-            // FIX: реальный bundle PayPal в App Store — com.yourcompany.PPClient.
-            // Старое значение com.paypal.PPClient никогда не совпадало с живым
-            // процессом, поэтому _jb_shouldBypass оставался NO, syscall-хуки
-            // (stat/lstat/access/open/dlopen/dlsym/readlink) не активировались,
-            // антифрод PayPal видел джейл и приложение закрывалось через
-            // несколько секунд после попытки входа.
-            @"com.yourcompany.PPClient",
+            // FIX 3: реальный bundle PayPal — com.paypal.PPClient.
+            @"com.paypal.PPClient",
             @"com.burbn.instagram",
+            @"com.instagram.Instagram",
             @"com.snapchat.snapchat",
             @"com.zhiliaoapp.musically",
             @"com.facebook.Facebook",
@@ -45,6 +43,8 @@ static NSArray<NSString *> *_jb_targetBundles(void) {
             @"com.bankofamerica.BofAMobileBank",
             @"com.skype.skype",
             @"us.zoom.videomeetings",
+            @"com.venmo.Venmo",
+            @"com.cashapp.squarecash",
         ];
     });
     return list;
@@ -52,67 +52,66 @@ static NSArray<NSString *> *_jb_targetBundles(void) {
 
 static BOOL _jb_shouldBypass = NO;
 
-static NSArray<NSString *> *_jb_blacklist(void) {
-    static NSArray *list = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        list = @[
-            @"/Applications/Cydia.app",
-            @"/Library/MobileSubstrate",
-            @"/Library/Substitute",
-            @"/Library/TweakInject",
-            @"/usr/lib/libsubstrate.dylib",
-            @"/usr/lib/libhooker.dylib",
-            @"/usr/lib/libellekit.dylib",
-            @"/usr/lib/libsubstitute.dylib",
-            @"/usr/lib/substrate",
-            @"/usr/lib/TweakInject.dylib",
-            @"/usr/bin/cycript",
-            @"/usr/bin/ssh",
-            @"/usr/sbin/sshd",
-            @"/usr/bin/sileo",
-            @"/etc/apt",
-            @"/etc/ssh/sshd_config",
-            @"/private/var/lib/apt",
-            @"/private/var/lib/cydia",
-            @"/private/var/stash",
-            @"/private/var/tmp/cydia.log",
-            @"/bin/bash",
-            @"/bin/sh",
-            // FIX 2: rootless варианты (/var/jb/) — PayPal делает прямые stat() на них.
-            @"/var/jb/Library/MobileSubstrate",
-            @"/var/jb/Library/Substitute",
-            @"/var/jb/Library/TweakInject",
-            @"/var/jb/usr/lib/libsubstrate.dylib",
-            @"/var/jb/usr/lib/libhooker.dylib",
-            @"/var/jb/usr/lib/libellekit.dylib",
-            @"/var/jb/usr/lib/libsubstitute.dylib",
-            @"/var/jb/usr/lib/TweakInject.dylib",
-            @"/var/jb/usr/bin/cycript",
-            @"/var/jb/usr/bin/ssh",
-            @"/var/jb/etc/apt",
-            @"/var/jb/etc/ssh/sshd_config",
-            @"/var/jb/bin/bash",
-            @"/var/jb/bin/sh",
-            @"/var/jb/Applications/Cydia.app",
-            // /var/jb НЕ добавляем полностью — там Sileo/Filza.
-            @"/var/jb/.jailbroken",
-            @"/.installed_unc0ver",
-            @"/.bootstrapped_electra",
-            @"/taurine",
-            @"/palera1n",
-        ];
-    });
-    return list;
-}
+// FIX 3: чистые C-строки, без NSArray/NSString.
+static const char *_jb_blacklist_paths[] = {
+    "/Applications/Cydia.app",
+    "/Library/MobileSubstrate",
+    "/Library/Substitute",
+    "/Library/TweakInject",
+    "/usr/lib/libsubstrate.dylib",
+    "/usr/lib/libhooker.dylib",
+    "/usr/lib/libellekit.dylib",
+    "/usr/lib/libsubstitute.dylib",
+    "/usr/lib/substrate",
+    "/usr/lib/TweakInject.dylib",
+    "/usr/bin/cycript",
+    "/usr/bin/ssh",
+    "/usr/sbin/sshd",
+    "/usr/bin/sileo",
+    "/etc/apt",
+    "/etc/ssh/sshd_config",
+    "/private/var/lib/apt",
+    "/private/var/lib/cydia",
+    "/private/var/stash",
+    "/private/var/tmp/cydia.log",
+    "/bin/bash",
+    "/bin/sh",
+    "/var/jb/Library/MobileSubstrate",
+    "/var/jb/Library/Substitute",
+    "/var/jb/Library/TweakInject",
+    "/var/jb/usr/lib/libsubstrate.dylib",
+    "/var/jb/usr/lib/libhooker.dylib",
+    "/var/jb/usr/lib/libellekit.dylib",
+    "/var/jb/usr/lib/libsubstitute.dylib",
+    "/var/jb/usr/lib/TweakInject.dylib",
+    "/var/jb/usr/bin/cycript",
+    "/var/jb/usr/bin/ssh",
+    "/var/jb/etc/apt",
+    "/var/jb/etc/ssh/sshd_config",
+    "/var/jb/bin/bash",
+    "/var/jb/bin/sh",
+    "/var/jb/Applications/Cydia.app",
+    "/var/jb/.jailbroken",
+    "/var/LIB/MobileSubstrate",
+    "/var/LIB/TweakInject",
+    "/.installed_unc0ver",
+    "/.bootstrapped_electra",
+    "/taurine",
+    "/palera1n",
+    NULL
+};
 
+// FIX 3: чистая C-функция. Никаких NSString/Foundation.
 static BOOL _path_is_blacklisted(const char *path) {
-    if (!path || strlen(path) == 0) return NO;
-    NSString *s = [NSString stringWithUTF8String:path];
-    if (!s) return NO;
-    for (NSString *bad in _jb_blacklist()) {
-        if ([s isEqualToString:bad]) return YES;
-        if ([s hasPrefix:[bad stringByAppendingString:@"/"]]) return YES;
+    if (!path || path[0] == 0) return NO;
+    size_t plen = strlen(path);
+    for (int i = 0; _jb_blacklist_paths[i]; i++) {
+        const char *bad = _jb_blacklist_paths[i];
+        size_t blen = strlen(bad);
+        if (plen < blen) continue;
+        if (strncmp(path, bad, blen) != 0) continue;
+        if (plen == blen) return YES;
+        if (path[blen] == '/') return YES;
     }
     return NO;
 }
@@ -174,9 +173,6 @@ static char *hook_getenv(const char *name) {
     return orig_getenv(name);
 }
 
-// FIX 2: dlsym — PayPal SDK дёргает dlsym(RTLD_DEFAULT, "MSHookFunction") и аналоги.
-// Внимание: используем точное strcmp по чёрному списку. strstr() ловил легитимные
-// символы PayPal SDK с подстрокой "_logos_" и роняло приложение на старте.
 static const char *_jb_dlsym_blacklist[] = {
     "MSHookFunction",
     "MSHookMessageEx",
@@ -198,48 +194,41 @@ static void *hook_dlsym(void *handle, const char *symbol) {
     return orig_dlsym(handle, symbol);
 }
 
-// FIX 2: readlink — антифрод проверяет симлинки.
 static ssize_t (*orig_readlink)(const char *, char *, size_t);
 static ssize_t hook_readlink(const char *path, char *buf, size_t bufsize) {
     if (_jb_shouldBypass && _path_is_blacklisted(path)) { errno = ENOENT; return -1; }
     return orig_readlink(path, buf, bufsize);
 }
 
-// FIX 2: statfs — раньше форсировали MNT_RDONLY для "/". На современном rootless
-// iOS 16+ ядро уже возвращает root как RO, а на checkra1n/dopamine это могло
-// конфликтовать с проверками PayPal-SDK (приложение падало после первой проверки).
-// Оставлено как no-op, чтобы при необходимости легко вернуть поведение.
-static int (*orig_statfs)(const char *, struct statfs *);
-static int hook_statfs(const char *path, struct statfs *buf) {
-    return orig_statfs(path, buf);
+static BOOL _str_ends_with(const char *s, const char *suffix) {
+    if (!s || !suffix) return NO;
+    size_t sl = strlen(s), su = strlen(suffix);
+    if (sl < su) return NO;
+    return strcasecmp(s + sl - su, suffix) == 0;
 }
 
-// FIX 2: dlopen — фильтр строго по basename / hasSuffix.
-// containsString() ловил случайные пути внутри PayPal.framework и приложение
-// падало на старте, потому что dlopen возвращал NULL для своих же фреймворков.
+static const char *_basename_c(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
 static void *(*orig_dlopen)(const char *, int);
 static void *hook_dlopen(const char *path, int mode) {
     if (_jb_shouldBypass && path) {
-        NSString *p = [NSString stringWithUTF8String:path];
-        if (p) {
-            NSString *lp = [p lowercaseString];
-            NSString *base = [lp lastPathComponent];
-            // точное имя dylib
-            if ([base isEqualToString:@"libsubstrate.dylib"]) return NULL;
-            if ([base isEqualToString:@"libhooker.dylib"]) return NULL;
-            if ([base isEqualToString:@"libellekit.dylib"]) return NULL;
-            if ([base isEqualToString:@"libsubstitute.dylib"]) return NULL;
-            if ([base isEqualToString:@"libroothideboot.dylib"]) return NULL;
-            if ([base isEqualToString:@"cydiasubstrate"]) return NULL;
-            if ([base isEqualToString:@"substrate"]) return NULL;
-            if ([base isEqualToString:@"substitute"]) return NULL;
-            if ([base isEqualToString:@"libcycript.dylib"]) return NULL;
-            if ([base isEqualToString:@"libfrida-gadget.dylib"]) return NULL;
-            // точные framework-пути
-            if ([lp hasSuffix:@"/cydiasubstrate.framework/cydiasubstrate"]) return NULL;
-            if ([lp hasSuffix:@"/mobilesubstrate.dylib"]) return NULL;
-            if ([lp hasSuffix:@"/tweakinject.dylib"]) return NULL;
-        }
+        const char *base = _basename_c(path);
+        if (strcasecmp(base, "libsubstrate.dylib") == 0) return NULL;
+        if (strcasecmp(base, "libhooker.dylib") == 0) return NULL;
+        if (strcasecmp(base, "libellekit.dylib") == 0) return NULL;
+        if (strcasecmp(base, "libsubstitute.dylib") == 0) return NULL;
+        if (strcasecmp(base, "libroothideboot.dylib") == 0) return NULL;
+        if (strcasecmp(base, "cydiasubstrate") == 0) return NULL;
+        if (strcasecmp(base, "substrate") == 0) return NULL;
+        if (strcasecmp(base, "substitute") == 0) return NULL;
+        if (strcasecmp(base, "libcycript.dylib") == 0) return NULL;
+        if (strcasecmp(base, "libfrida-gadget.dylib") == 0) return NULL;
+        if (_str_ends_with(path, "/CydiaSubstrate.framework/CydiaSubstrate")) return NULL;
+        if (_str_ends_with(path, "/MobileSubstrate.dylib")) return NULL;
+        if (_str_ends_with(path, "/TweakInject.dylib")) return NULL;
     }
     return orig_dlopen(path, mode);
 }
@@ -298,10 +287,6 @@ static void *hook_dlopen(const char *path, int mode) {
 
 %end
 
-// ========================================
-// ИНИЦИАЛИЗАЦИЯ
-// ========================================
-
 %ctor {
     @autoreleasepool {
         NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
@@ -325,10 +310,8 @@ static void *hook_dlopen(const char *path, int mode) {
         MSHookFunction((void *)opendir,  (void *)hook_opendir,  (void **)&orig_opendir);
         MSHookFunction((void *)getenv,   (void *)hook_getenv,   (void **)&orig_getenv);
         MSHookFunction((void *)dlopen,   (void *)hook_dlopen,   (void **)&orig_dlopen);
-        // FIX 2: дополнительные хуки для PayPal и др.
         MSHookFunction((void *)dlsym,    (void *)hook_dlsym,    (void **)&orig_dlsym);
         MSHookFunction((void *)readlink, (void *)hook_readlink, (void **)&orig_readlink);
-        MSHookFunction((void *)statfs,   (void *)hook_statfs,   (void **)&orig_statfs);
 
         %init;
         NSLog(@"[MPU/JBBypass] Active for: %@", bid);
