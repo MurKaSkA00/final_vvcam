@@ -1,7 +1,8 @@
-// WebRTCHooks.x - MediaPlaybackUtils v1.7.5
-// Перехват WebRTC камеры — нативные приложения (FaceTime, Zoom, Skype, и т.п.).
-// В Safari/Chrome/Brave работу с камерой берёт на себя BrowserHooks.x — два .x
-// в одном WebKit-процессе хукали одни и те же классы и ломали getUserMedia.
+// WebRTCHooks.x - MediaPlaybackUtils v1.7.6
+// FIX 3:
+//   - PayPal bundle id (com.yourcompany.PPClient -> com.paypal.PPClient).
+//   - Используем _mpu_globalHookedClasses из SharedState.h — общий с Tweak.x
+//     и BrowserHooks.x.
 
 #import <Foundation/Foundation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -11,12 +12,6 @@
 #import <substrate.h>
 #import "SharedState.h"
 
-static NSMutableSet *_webrtc_hooked = nil;
-
-// FIX: фильтр по имени класса. Раньше хукали ЛЮБОЙ класс с
-// captureOutput:didOutputSampleBuffer:fromConnection: — в com.apple.WebKit.GPU
-// это десятки случайных внутренних классов WebKit, замена их IMP ломала
-// рендер вкладки (webcammictest и любой getUserMedia вообще не открывались).
 static BOOL _webrtc_isInterestingClass(NSString *n) {
     if (!n) return NO;
     return ([n containsString:@"WebCore"] ||
@@ -31,7 +26,6 @@ static BOOL _webrtc_isInterestingClass(NSString *n) {
             [n containsString:@"VideoCaptureSource"] ||
             [n containsString:@"VideoCaptureObserver"] ||
             [n containsString:@"AVVideoCaptureSource"] ||
-            // не-браузерные классы (нативные приложения с AV-делегатами)
             [n hasSuffix:@"VideoOutput"] ||
             [n hasSuffix:@"CaptureDelegate"] ||
             [n hasSuffix:@"SampleBufferDelegate"]);
@@ -42,8 +36,9 @@ static void _webrtc_hookClass(Class cls) {
     NSString *name = NSStringFromClass(cls);
     if (!name) return;
 
-    @synchronized(_webrtc_hooked) {
-        if ([_webrtc_hooked containsObject:name]) return;
+    // FIX 3: общий lock + общий set между всеми .x
+    @synchronized(_mpu_globalHookedLock) {
+        if ([_mpu_globalHookedClasses containsObject:name]) return;
     }
 
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
@@ -121,7 +116,9 @@ static void _webrtc_hookClass(Class cls) {
         }
     }
 
-    @synchronized(_webrtc_hooked) { [_webrtc_hooked addObject:name]; }
+    @synchronized(_mpu_globalHookedLock) {
+        [_mpu_globalHookedClasses addObject:name];
+    }
     NSLog(@"[MPU/WebRTC] Hooked: %@", name);
 }
 
@@ -136,13 +133,12 @@ static void _webrtc_scanAllClasses(void) {
         const char *cn = class_getName(cls);
         if (!cn) continue;
         NSString *name = [NSString stringWithUTF8String:cn];
-        // FIX: фильтр по имени — не трогаем посторонние классы
         if (!_webrtc_isInterestingClass(name)) continue;
         if (!class_getInstanceMethod(cls, sel)) continue;
         _webrtc_hookClass(cls);
     }
     free(classes);
-    NSLog(@"[MPU/WebRTC] Scan done, hooked %lu classes", (unsigned long)_webrtc_hooked.count);
+    NSLog(@"[MPU/WebRTC] Scan done");
 }
 
 %hook AVCaptureVideoDataOutput
@@ -174,16 +170,9 @@ static void _webrtc_scanAllClasses(void) {
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
         if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
-        // FIX: PayPal — пропускаем objc_copyClassList / swizzle.
-        // PayPal SDK периодически сканирует ObjC-runtime, любые добавленные
-        // IMP через imp_implementationWithBlock детектятся как tampering,
-        // приложение убивает само себя через ~5 сек после login. Антифрод
-        // для PayPal обеспечивается только JailbreakBypass.x (syscall-уровень).
-        if ([bid isEqualToString:@"com.yourcompany.PPClient"]) return;
+        // FIX 3: реальный bundle PayPal — com.paypal.PPClient.
+        if ([bid isEqualToString:@"com.paypal.PPClient"]) return;
         if ([bid hasPrefix:@"com.paypal."]) return;
-        // FIX: в WebKit/Safari/Chrome пайплайн камеры обрабатывает BrowserHooks.x.
-        // Двойной хук на одни и те же классы из двух .x ломал webcammictest
-        // и getUserMedia в браузерах.
         if ([bid hasPrefix:@"com.apple.WebKit"])       return;
         if ([bid hasPrefix:@"com.apple.mobilesafari"]) return;
         if ([bid hasPrefix:@"com.google.chrome"])      return;
@@ -196,7 +185,6 @@ static void _webrtc_scanAllClasses(void) {
         if ([bid hasPrefix:@"com.kagi"])               return;
         if ([path hasPrefix:@"/usr/"]) return;
 
-        _webrtc_hooked = [NSMutableSet new];
         %init;
         NSLog(@"[MPU/WebRTC] Loaded for %@", bid);
 
