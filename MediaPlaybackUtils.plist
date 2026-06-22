@@ -8,13 +8,13 @@
         <string>Any</string>
         <key>Bundles</key>
         <array>
-            <!-- ⭐ КРИТИЧНО ДЛЯ БРАУЗЕРОВ -->
-            <string>com.apple.WebKit.GPU</string>
-            <string>com.apple.WebKit.WebContent</string>
-            <string>com.apple.WebKit.Networking</string>
-            <string>com.apple.WebKit.Plugin.64</string>
-            <string>com.apple.SafariViewController</string>
-            <string>com.apple.SafariViewService</string>
+            <!-- FIX 3: УБРАНЫ системные XPC-сервисы WebKit.
+                 com.apple.WebKit.GPU/WebContent/Networking/Plugin.64 — это
+                 отдельные процессы Apple. Инжект в них роняет любые приложения
+                 с WebView (банки, Telegram, Twitter, почтовые клиенты),
+                 потому что Tweak.x/WebRTCHooks.x/StealthHooks.x делают там
+                 early-return и оставляют _v_lock = nil, а BrowserHooks.x
+                 продолжает работать с этим nil-локом → гонки и краши. -->
 
             <!-- Камера -->
             <string>com.apple.camera</string>
@@ -54,10 +54,12 @@
 
             <!-- Соцсети -->
             <string>com.instagram.Instagram</string>
+            <string>com.burbn.instagram</string>
             <string>com.facebook.Facebook</string>
             <string>com.zhiliaoapp.musically</string>
             <string>com.snapchat.snapchat</string>
             <string>com.twitter.twitter-iphone</string>
+            <string>com.atebits.Tweetie2</string>
             <string>com.pinterest.Pinterest</string>
             <string>com.reddit.Reddit</string>
             <string>com.linkedin.LinkedIn</string>
@@ -79,12 +81,12 @@
             <string>com.match.match</string>
             <string>com.okcupid.okcupid</string>
 
-            <!-- Банки -->
-            <!-- FIX: реальный bundle PayPal в App Store — com.yourcompany.PPClient,
-                 (см. apple-app-site-association на paypal.com). Раньше тут стоял
-                 несуществующий com.paypal.www, поэтому твик грузился не в тот
-                 процесс, а в реальном PayPal не было ни Bypass, ни safe-return. -->
-            <string>com.yourcompany.PPClient</string>
+            <!-- Банки / Платежи -->
+            <!-- FIX 3: реальный PayPal в App Store — com.paypal.PPClient.
+                 Старое значение com.yourcompany.PPClient (Theos default
+                 template) НЕ соответствует ни одному приложению — твик
+                 в реальный PayPal вообще не загружался. -->
+            <string>com.paypal.PPClient</string>
             <string>com.venmo.Venmo</string>
             <string>com.cashapp.squarecash</string>
             <string>com.konylabs.westernunion</string>
