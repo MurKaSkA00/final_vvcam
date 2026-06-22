@@ -1,4 +1,4 @@
-// JailbreakBypass.x - MediaPlaybackUtils v1.7.4
+// JailbreakBypass.x - MediaPlaybackUtils v1.7.5
 // Скрывает джейлбрейк ТОЛЬКО от конкретных целевых приложений.
 // НЕ убивает Sileo, Filza, palera1n, Chrome.
 
@@ -24,7 +24,13 @@ static NSArray<NSString *> *_jb_targetBundles(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         list = @[
-            @"com.paypal.PPClient",
+            // FIX: реальный bundle PayPal в App Store — com.yourcompany.PPClient.
+            // Старое значение com.paypal.PPClient никогда не совпадало с живым
+            // процессом, поэтому _jb_shouldBypass оставался NO, syscall-хуки
+            // (stat/lstat/access/open/dlopen/dlsym/readlink) не активировались,
+            // антифрод PayPal видел джейл и приложение закрывалось через
+            // несколько секунд после попытки входа.
+            @"com.yourcompany.PPClient",
             @"com.burbn.instagram",
             @"com.snapchat.snapchat",
             @"com.zhiliaoapp.musically",
