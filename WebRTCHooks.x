@@ -170,9 +170,6 @@ static void _webrtc_scanAllClasses(void) {
         if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
         if ([bid hasPrefix:@"com.apple.assetsd"]) return;
         if ([bid hasPrefix:@"com.apple.cameracaptured"]) return;
-        // FIX 3: реальный bundle PayPal — com.paypal.PPClient.
-        if ([bid isEqualToString:@"com.paypal.PPClient"]) return;
-        if ([bid hasPrefix:@"com.paypal."]) return;
         if ([bid hasPrefix:@"com.apple.WebKit"])       return;
         if ([bid hasPrefix:@"com.apple.mobilesafari"]) return;
         if ([bid hasPrefix:@"com.google.chrome"])      return;
