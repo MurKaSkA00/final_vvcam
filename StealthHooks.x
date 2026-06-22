@@ -219,10 +219,6 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
-        // FIX 3: реальный bundle PayPal — com.paypal.PPClient.
-        if ([bid isEqualToString:@"com.paypal.PPClient"]) return;
-        if ([bid hasPrefix:@"com.paypal."]) return;
-
         if ([bid hasPrefix:@"com.apple."]) return;
         if ([path hasPrefix:@"/usr/"]) return;
         if ([path hasPrefix:@"/System/"]) return;
