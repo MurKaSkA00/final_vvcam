@@ -1,4 +1,4 @@
-Поскольку у вас уже есть отдельные файлы Tweak.x, AntifraudHooks.x, JailbreakBypass.x, StealthHooks.x, WebRTCHooks.x в репозитории (Theos их собирает по отдельности — видно по логу Preprocessing Tweak.x… и т.д.), в BrowserHooks.x должна лежать только browser-секция. Вот полностью исправленный файл:
+===== BEGIN =====
 
 // BrowserHooks.x - MediaPlaybackUtils v1.7.6
 // FIX 3:
@@ -38,7 +38,6 @@ static void _brw_hookClass(Class cls) {
     NSString *name = NSStringFromClass(cls);
     if (!name) return;
 
-    // FIX 3: общий set между Tweak.x / WebRTCHooks.x / BrowserHooks.x
     @synchronized(_mpu_globalHookedLock) {
         if ([_mpu_globalHookedClasses containsObject:name]) return;
     }
@@ -135,7 +134,6 @@ static void _brw_scan(void) {
     free(classes);
 }
 
-// FIX 3: rescan ограничен ~60 секундами, потом таймер останавливается.
 static void _brw_startPeriodicScan(void) {
     dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
     _brw_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
@@ -145,7 +143,7 @@ static void _brw_startPeriodicScan(void) {
     dispatch_source_set_event_handler(_brw_timer, ^{
         _brw_scan();
         ticks++;
-        if (ticks >= 30) { // ~60 секунд → стоп
+        if (ticks >= 30) {
             dispatch_source_cancel(_brw_timer);
         }
     });
@@ -186,8 +184,6 @@ static BOOL _brw_isBrowserProcess(NSString *bid) {
         if (!_brw_isBrowserProcess(bid)) return;
         if ([path hasPrefix:@"/usr/"]) return;
 
-        // FIX 3: ленивая инициализация общего set'а на случай, если Tweak.x
-        // не запустился (чистый WebKit-процесс без AV).
         if (!_mpu_globalHookedClasses) {
             _mpu_globalHookedClasses = [NSMutableSet new];
             _mpu_globalHookedLock    = [NSObject new];
