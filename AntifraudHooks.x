@@ -37,9 +37,16 @@ static NSString *(*orig_NSStringFromClass)(Class) = NULL;
 static NSString *hook_NSStringFromClass(Class cls) {
     NSString *r = orig_NSStringFromClass(cls);
     if (!r) return r;
-    if ([r hasSuffix:@"_MPU"]) return [r substringToIndex:r.length - 4];
+    // FIX 5: классы названы с ПРЕФИКСОМ _MPU (например _MPUMediaBufferAdapter,
+    // _MPUFrameProcessor). Старый код проверял hasSuffix:@"_MPU" — он никогда
+    // не срабатывал, и PromonShield (PayPal/банки) ловил наши классы по имени
+    // через objc_copyClassList -> приложение тихо закрывалось.
+    if ([r hasPrefix:@"_MPU"]) {
+        return [@"NS" stringByAppendingString:[r substringFromIndex:4]];
+    }
     return r;
 }
+
 
 %hook AVCaptureDevice
 
