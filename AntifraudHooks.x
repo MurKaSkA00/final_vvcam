@@ -1,5 +1,10 @@
-// AntifraudHooks.x - MediaPlaybackUtils v1.7.5
-// FIX: использует SharedState.h
+// AntifraudHooks.x - MediaPlaybackUtils v1.7.6
+// FIX 3:
+//   - PayPal bundle id (com.yourcompany.PPClient -> com.paypal.PPClient).
+//   - isFocusPointOfInterestSupported / isExposurePointOfInterestSupported /
+//     isFlashAvailable / isTorchAvailable БОЛЬШЕ НЕ возвращают безусловно YES.
+//     Раньше это ломало Instagram/Snapchat: они пытались реально включить
+//     torch на устройствах без него -> NSInvalidArgumentException -> крах.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -59,10 +64,10 @@ static NSString *hook_NSStringFromClass(Class cls) {
     return t;
 }
 
-- (BOOL)isFocusPointOfInterestSupported { return YES; }
-- (BOOL)isExposurePointOfInterestSupported { return YES; }
-- (BOOL)isFlashAvailable { return YES; }
-- (BOOL)isTorchAvailable { return YES; }
+// FIX 3: возвращаем реальные возможности устройства.
+// Раньше безусловный YES ломал Instagram/Snapchat: они дёргали setTorchMode:/
+// setFocusPointOfInterest: и получали NSInvalidArgumentException на устройствах,
+// где это реально не поддерживалось -> необработанное исключение -> краш.
 
 - (BOOL)hasMediaType:(AVMediaType)mediaType {
     if ([mediaType isEqualToString:AVMediaTypeVideo]) return YES;
@@ -72,8 +77,10 @@ static NSString *hook_NSStringFromClass(Class cls) {
 %end
 
 %hook AVCaptureConnection
-- (BOOL)isVideoMirroringSupported { return YES; }
-- (BOOL)isVideoOrientationSupported { return YES; }
+// FIX 3: вернули %orig — иначе AVCaptureSession бросал на commitConfiguration,
+// если устройство реально не поддерживало mirroring/orientation.
+- (BOOL)isVideoMirroringSupported { return %orig; }
+- (BOOL)isVideoOrientationSupported { return %orig; }
 %end
 
 %hook AVCaptureDeviceFormat
@@ -137,13 +144,8 @@ static NSString *hook_NSStringFromClass(Class cls) {
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
 
-        // FIX: для PayPal оставляем только JailbreakBypass.x.
-        // NSStringFromClass / NSUserDefaults objectForKey: подменяются через
-        // dispatch_async — PayPal SDK в этот момент уже на середине запуска,
-        // подмена ломает кэш классов и приложение мгновенно закрывается.
-        // Реальный bundle PayPal — com.yourcompany.PPClient. Префикс com.paypal.
-        // оставлен на случай dev/QA-сборок.
-        if ([bid isEqualToString:@"com.yourcompany.PPClient"]) return;
+        // FIX 3: реальный bundle PayPal — com.paypal.PPClient.
+        if ([bid isEqualToString:@"com.paypal.PPClient"]) return;
         if ([bid hasPrefix:@"com.paypal."]) return;
 
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
