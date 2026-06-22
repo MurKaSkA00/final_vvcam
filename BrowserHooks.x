@@ -1,5 +1,3 @@
-===== BEGIN =====
-
 // BrowserHooks.x - MediaPlaybackUtils v1.7.6
 // FIX 3:
 //   - Используем общий _mpu_globalHookedClasses из SharedState.h — никаких
