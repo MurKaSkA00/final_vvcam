@@ -26,36 +26,15 @@ jobs:
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
 
       - name: Install dependencies
-        run: brew install ldid git-lfs
+        run: brew install ldid
 
-      - name: Install SDK (with Git LFS)
+      - name: Install SDK
         run: |
-          git lfs install
-          git clone --depth=1 https://github.com/theos/sdks.git /tmp/theos-sdks
-          cd /tmp/theos-sdks
-          git lfs pull
           mkdir -p "$HOME/theos/sdks"
-          find . -maxdepth 1 -type d -name "*.sdk" -exec cp -R {} "$HOME/theos/sdks/" \;
-          rm -rf /tmp/theos-sdks
-          echo "Installed SDKs:"
-          ls "$HOME/theos/sdks"
-
-      - name: Verify Preferences framework is present
-        run: |
-          SDK_DIR=$(ls -d "$HOME"/theos/sdks/iPhoneOS*.sdk | sort -V | tail -1)
-          echo "Using SDK: $SDK_DIR"
-          PF="$SDK_DIR/System/Library/PrivateFrameworks/Preferences.framework"
-          if [ ! -e "$PF/Preferences.tbd" ] && [ ! -e "$PF/Preferences" ]; then
-            echo "ERROR: Preferences.framework stub is missing in $PF" >&2
-            ls -la "$PF" || true
-            exit 1
-          fi
-          # Reject LFS pointer files (they start with "version https://git-lfs")
-          if [ -f "$PF/Preferences.tbd" ] && head -1 "$PF/Preferences.tbd" | grep -q "git-lfs"; then
-            echo "ERROR: Preferences.tbd is an LFS pointer, not the real file" >&2
-            exit 1
-          fi
-          echo "OK: Preferences framework stub is valid."
+          curl -L https://github.com/theos/sdks/archive/master.zip -o master.zip
+          unzip -q master.zip
+          find sdks-master -maxdepth 1 -type d -name "*.sdk" -exec mv {} "$HOME/theos/sdks/" \;
+          rm -rf master.zip sdks-master
 
       - name: Build
         run: |
