@@ -1,10 +1,10 @@
 // AntifraudHooks.x - MediaPlaybackUtils v1.7.7
-// FIX 3:
-//   - PayPal bundle id (com.yourcompany.PPClient -> com.paypal.PPClient).
-//   - isFocusPointOfInterestSupported / isExposurePointOfInterestSupported /
-//     isFlashAvailable / isTorchAvailable БОЛЬШЕ НЕ возвращают безусловно YES.
-//     Раньше это ломало Instagram/Snapchat: они пытались реально включить
-//     torch на устройствах без него -> NSInvalidArgumentException -> крах.
+// FIX 5 (v1.7.7):
+//   - MSHookFunction на NSStringFromClass теперь НЕ ставится в браузерных
+//     и WebKit-процессах. Эта функция дёргается миллионы раз на старте
+//     любого Cocoa-приложения; в WebKit + WebContent + GPU процессах
+//     trampoline иногда не успевал инициализироваться до первого вызова
+//     → SIGSEGV в Foundation до AppDelegate.
 // FIX 4 (v1.7.7) — остаточные launch-crash'и в Instagram / Snapchat / TikTok /
 // банковских приложениях, не исправленные FIX 3:
 //   - hasMediaType: больше не возвращает безусловно YES для AVMediaTypeVideo.
@@ -75,9 +75,6 @@ static NSString *hook_NSStringFromClass(Class cls) {
 - (AVCaptureDevicePosition)position {
     AVCaptureDevicePosition p = %orig;
     // FIX 4: НЕ подменяем Unspecified на Back для всех устройств подряд.
-    // Audio-устройства (микрофоны) и external accessories легитимно
-    // возвращают Unspecified. Принудительный Back ломал AVCaptureSession
-    // в Instagram/Snapchat -> краш на старте захвата.
     return p;
 }
 
@@ -90,27 +87,15 @@ static NSString *hook_NSStringFromClass(Class cls) {
     return t;
 }
 
-// FIX 3: возвращаем реальные возможности устройства.
-// Раньше безусловный YES ломал Instagram/Snapchat: они дёргали setTorchMode:/
-// setFocusPointOfInterest: и получали NSInvalidArgumentException на устройствах,
-// где это реально не поддерживалось -> необработанное исключение -> краш.
-
 - (BOOL)hasMediaType:(AVMediaType)mediaType {
-    // FIX 4: больше не врём про hasMediaType:. Раньше безусловный YES для
-    // AVMediaTypeVideo превращал микрофон в "видео-устройство". Приложение
-    // пыталось сделать AVCaptureDeviceInput.deviceInputWithDevice: с
-    // audio-устройством как видео-источником -> nil + NSException на
-    // -[AVCaptureSession addInput:] -> краш при запуске камеры.
-    // Настоящие камеры и так корректно возвращают YES для AVMediaTypeVideo,
-    // поэтому подмена не нужна и только ломает приложения.
+    // FIX 4: больше не врём про hasMediaType:.
     return %orig;
 }
 
 %end
 
 %hook AVCaptureConnection
-// FIX 3: вернули %orig — иначе AVCaptureSession бросал на commitConfiguration,
-// если устройство реально не поддерживало mirroring/orientation.
+// FIX 3: вернули %orig — иначе AVCaptureSession бросал на commitConfiguration.
 - (BOOL)isVideoMirroringSupported { return %orig; }
 - (BOOL)isVideoOrientationSupported { return %orig; }
 %end
@@ -186,6 +171,18 @@ static NSString *hook_NSStringFromClass(Class cls) {
         if ([bid isEqualToString:@"xyz.willy.Zebra"]) return;
         if ([bid hasPrefix:@"com.opa334."]) return;
         if ([bid hasPrefix:@"com.palera1n"]) return;
+        // FIX 5: пропускаем браузеры и WebKit-XPC процессы — MSHookFunction
+        // на NSStringFromClass в них ронял Safari/Chrome до AppDelegate.
+        if ([bid hasPrefix:@"com.apple.WebKit"])       return;
+        if ([bid hasPrefix:@"com.apple.mobilesafari"]) return;
+        if ([bid hasPrefix:@"com.google.chrome"])      return;
+        if ([bid hasPrefix:@"com.brave.ios"])          return;
+        if ([bid hasPrefix:@"com.opera"])              return;
+        if ([bid hasPrefix:@"com.microsoft.msedge"])   return;
+        if ([bid hasPrefix:@"com.firefox.ios"])        return;
+        if ([bid hasPrefix:@"org.mozilla.ios"])        return;
+        if ([bid hasPrefix:@"com.ddg.ios"])            return;
+        if ([bid hasPrefix:@"com.kagi"])               return;
 
         dispatch_async(dispatch_get_main_queue(), ^{
             MSHookFunction((void *)NSStringFromClass,
