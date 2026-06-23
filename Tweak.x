@@ -254,7 +254,7 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
                 IMP newIMP = imp_implementationWithBlock(^(id self_,
                     AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
                     @try {
-                        CMSampleBufferRef rep = (_enabled && sb)
+                        CMSampleBufferRef rep = (_enabled && sb && _url.length > 0)
                             ? _v_makeReplacementSampleBuffer(sb) : NULL;
                         CMSampleBufferRef use = rep ? rep : sb;
                         if (use)
