@@ -1,5 +1,3 @@
-Готово. Файл лежит в /app/tweak_fix/Tweak.x. Ниже — то же самое прямо для копипаста:
-
 // =============================================================================
 //  MediaPlaybackUtils — Tweak.x
 //  Reference complete build with FIX 1…FIX 6 applied.
