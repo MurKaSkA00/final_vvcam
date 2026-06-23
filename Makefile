@@ -9,7 +9,7 @@ TWEAK_NAME = MediaPlaybackUtils
 
 MediaPlaybackUtils_FILES = Tweak.x
 MediaPlaybackUtils_CFLAGS = -fobjc-arc
-MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore IOSurface
+MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore 
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
