@@ -25,6 +25,12 @@
 #import <objc/runtime.h>
 #import "SharedState.h"
 
+// AVCaptureStillImageOutput помечен deprecated с iOS 10, а проект собирается с
+// -Werror. Глушим только это предупреждение для всего файла (legacy-путь нужен
+// для старых приложений, которые всё ещё им пользуются).
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #define MPU_PHOTO_LOG(fmt, ...) NSLog(@"[MPU/Photo] " fmt, ##__VA_ARGS__)
 
 static CIContext *_mpu_photoCtx = nil;
@@ -282,3 +288,5 @@ static CMSampleBufferRef _mpu_makeSampleBuffer(CMSampleBufferRef original) CF_RE
         MPU_PHOTO_LOG(@"Loaded for %@", bid);
     }
 }
+
+#pragma clang diagnostic pop
