@@ -4,43 +4,49 @@
 <dict>
     <key>items</key>
     <array>
+
         <dict>
             <key>cell</key>
             <string>PSGroupCell</string>
             <key>label</key>
-            <string>Playback Settings</string>
+            <string>General</string>
         </dict>
+
         <dict>
             <key>cell</key>
             <string>PSSwitchCell</string>
             <key>default</key>
-            <true/>
+            <false/>
             <key>defaults</key>
-            <string>com.proximacore.mediaplaybackutils</string>
+            <string>com.mpu.mediaplaybackutils</string>
             <key>key</key>
             <string>enabled</string>
             <key>label</key>
             <string>Enabled</string>
             <key>PostNotification</key>
-            <string>com.proximacore.mpu/cfg</string>
+            <string>com.mpu.mediaplaybackutils/prefs-changed</string>
         </dict>
+
         <dict>
             <key>cell</key>
             <string>PSGroupCell</string>
             <key>label</key>
-            <string>Source URL</string>
+            <string>Stream</string>
             <key>footerText</key>
-            <string>HTTP stream or .m3u8 playlist URL.</string>
+            <string>HTTP/MJPEG/HLS URL of the stream that replaces the camera feed. Example: http://192.168.1.44:8888/live/stream/index.m3u8 — leave empty to keep the real camera (no black screen).</string>
         </dict>
+
         <dict>
             <key>cell</key>
             <string>PSEditTextCell</string>
-            <key>default</key>
-            <string>http://192.168.1.44:8888/live</string>
             <key>defaults</key>
-            <string>com.proximacore.mediaplaybackutils</string>
+            <string>com.mpu.mediaplaybackutils</string>
             <key>key</key>
             <string>rtspURL</string>
+            <key>label</key>
+            <string>RTSP URL</string>
+            <key>default</key>
+            <string></string>
             <key>keyboard</key>
             <string>URL</string>
             <key>autoCapsType</key>
@@ -48,10 +54,18 @@
             <key>autoCorrectionType</key>
             <integer>0</integer>
             <key>PostNotification</key>
-            <string>com.proximacore.mpu/cfg</string>
+            <string>com.mpu.mediaplaybackutils/prefs-changed</string>
         </dict>
+
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>footerText</key>
+            <string>After changing settings, relaunch the target app.</string>
+        </dict>
+
     </array>
     <key>title</key>
-    <string>Media Playback</string>
+    <string>Media Playback Utilities</string>
 </dict>
 </plist>
