@@ -11,7 +11,6 @@
 #import <CoreVideo/CoreVideo.h>
 #import <CoreImage/CoreImage.h>
 #import <QuartzCore/QuartzCore.h>
-#import <IOSurface/IOSurface.h>
 #import <ImageIO/ImageIO.h>
 #import <objc/runtime.h>
 
