@@ -345,12 +345,28 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
 }
 %end
 
+Нужно сделать две вещи:
+
+1. Выставить URL потока в настройках твика (обязательно!)
+Откройте на устройстве: Настройки → Media Playback Utilities → RTSP URL и введите рабочий адрес вашего MJPEG/HLS-потока, например:
+
+http://192.168.1.44:8888/live/stream/index.m3u8
+(тот же, что был хардкодом в v1.7.6, или ваш собственный)
+
+Если оставить пустым — overlay будет чёрным и все приложения с камерой будут краш-лупить. Это by-design твика: он подменяет камеру на ваш стрим, без стрима смысла в нём нет.
+
+2. Поправить Tweak.x — не вешать overlay, когда стрима нет
+Замените блок %hook AVCaptureVideoPreviewLayer целиком на это (в Tweak.x, начиная со строки // ── 3. ПРЕДПРОСМОТР):
+
 // ── 3. ПРЕДПРОСМОТР — AVCaptureVideoPreviewLayer ────────────────────────────
 %hook AVCaptureVideoPreviewLayer
 
 - (void)layoutSublayers {
     %orig;
     if (!_enabled) return;
+    // FIX 6: если URL не задан в prefs — overlay НЕ вешаем. Иначе превью
+    // остаётся сплошным чёрным, антифрод видит "мёртвую камеру" → exit().
+    if (_url.length == 0) return;
     _v_init();
 
     CALayer *overlay = objc_getAssociatedObject(self, "_v_overlay");
@@ -358,8 +374,11 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         overlay = [CALayer layer];
         overlay.contentsGravity = kCAGravityResizeAspectFill;
         overlay.zPosition = 999999;
-        overlay.backgroundColor = [UIColor blackColor].CGColor;
-        overlay.opaque = YES;
+        // FIX 6: НЕ ставим чёрный background и opaque=YES до первого буфера.
+        // Иначе пока стрим коннектится, экран чёрный → антифрод-детект.
+        overlay.backgroundColor = [UIColor clearColor].CGColor;
+        overlay.opaque = NO;
+        overlay.hidden = YES;
         [self addSublayer:overlay];
         objc_setAssociatedObject(self, "_v_overlay", overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -373,8 +392,6 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     overlay.frame = self.bounds;
-    overlay.hidden = NO;
-    overlay.opacity = 1.0;
     [CATransaction commit];
 }
 
@@ -393,11 +410,14 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         switching = _isSwitching;
     }
 
+    // FIX 6: нет буфера → overlay прозрачный и скрыт, показываем
+    // настоящую камеру вместо чёрного экрана.
     if (!bufCopy) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         overlay.contents = nil;
-        overlay.backgroundColor = [UIColor blackColor].CGColor;
+        overlay.hidden = YES;
+        overlay.opacity = 0.0;
         [CATransaction commit];
         return;
     }
@@ -416,6 +436,9 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
         [CATransaction setDisableActions:YES];
         overlay.contents = (__bridge id)surf;
         overlay.frame = self.bounds;
+        overlay.hidden = NO;
+        overlay.opacity = 1.0;
+        overlay.opaque = YES;
         [CATransaction commit];
         CVPixelBufferRelease(bufCopy);
         return;
@@ -434,6 +457,9 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
                     [CATransaction setDisableActions:YES];
                     overlay.contents = (__bridge id)cg;
                     overlay.frame = self.bounds;
+                    overlay.hidden = NO;
+                    overlay.opacity = 1.0;
+                    overlay.opaque = YES;
                     [CATransaction commit];
                     CGImageRelease(cg);
                 });
@@ -450,14 +476,12 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
 
 - (void)enqueueSampleBuffer:(CMSampleBufferRef)sampleBuffer {
     if (!_enabled || !sampleBuffer) { %orig; return; }
+    // FIX 6: без URL потока не подменяем — пропускаем настоящий буфер.
+    if (_url.length == 0) { %orig; return; }
     _v_init();
     CMSampleBufferRef rep = _v_makeReplacementSampleBuffer(sampleBuffer);
     if (rep) {
         %orig(rep);
-        // FIX 3: AVSampleBufferDisplayLayer декодирует асинхронно через
-        // VideoToolbox/GPU. Немедленный CFRelease(rep) приводил к
-        // use-after-free и крашу в mediaserverd / прямо в процессе.
-        // CFAutorelease даёт layer'у дочитать буфер до конца текущего tick.
         CFAutorelease(rep);
         return;
     }
@@ -465,6 +489,7 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
 }
 
 %end
+
 
 // ── 4. СЕССИЯ ───
 %hook AVCaptureSession
