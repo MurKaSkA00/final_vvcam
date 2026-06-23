@@ -47,6 +47,7 @@ static BOOL _stealth_should_hide_image(const char *name) {
     if (strstr(name, "TweakInject"))        return YES;
     if (strstr(name, "ChOma"))             return YES;
     if (strstr(name, "WebRTCHooks"))        return YES;
+    if (strstr(name, "PhotoCaptureHooks"))  return YES;
     if (strstr(name, "AntifraudHooks"))     return YES;
     if (strstr(name, "StealthHooks"))       return YES;
     if (strstr(name, "JailbreakBypass"))    return YES;
