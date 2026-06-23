@@ -13,7 +13,6 @@
 #import <CoreImage/CoreImage.h>
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
-#import <IOSurface/IOSurface.h>
 #import <objc/runtime.h>
 #import "SharedState.h"
 #import "_MPUMediaBufferAdapter.h"
