@@ -1,4 +1,4 @@
-objc
+
 #import "MPURootListController.h"
 
 @implementation MPURootListController
