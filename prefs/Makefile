@@ -11,6 +11,7 @@ MediaPlaybackUtilsPrefs_INSTALL_PATH = /Library/PreferenceBundles
 MediaPlaybackUtilsPrefs_FRAMEWORKS = UIKit
 MediaPlaybackUtilsPrefs_PRIVATE_FRAMEWORKS = Preferences
 MediaPlaybackUtilsPrefs_CFLAGS = -fobjc-arc
+MediaPlaybackUtilsPrefs_LDFLAGS = -F$(TARGET_PRIVATE_FRAMEWORK_PATH) -F$(THEOS_SDK_PATH)/System/Library/PrivateFrameworks
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
