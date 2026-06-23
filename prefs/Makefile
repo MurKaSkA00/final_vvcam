@@ -4,14 +4,13 @@ THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
 
-BUNDLE_NAME = MediaPlaybackUtilsPrefs
+BUNDLE_NAME = MediaPlaybackUtils
 
-MediaPlaybackUtilsPrefs_FILES = MPURootListController.m
-MediaPlaybackUtilsPrefs_INSTALL_PATH = /Library/PreferenceBundles
-MediaPlaybackUtilsPrefs_FRAMEWORKS = UIKit
-MediaPlaybackUtilsPrefs_PRIVATE_FRAMEWORKS = Preferences
-MediaPlaybackUtilsPrefs_CFLAGS = -fobjc-arc
-MediaPlaybackUtilsPrefs_LDFLAGS = -F$(TARGET_PRIVATE_FRAMEWORK_PATH) -F$(THEOS_SDK_PATH)/System/Library/PrivateFrameworks
+MediaPlaybackUtils_FILES = MPURootListController.m
+MediaPlaybackUtils_FRAMEWORKS = UIKit Foundation
+MediaPlaybackUtils_INSTALL_PATH = /Library/PreferenceBundles
+MediaPlaybackUtils_CFLAGS = -fobjc-arc
+MediaPlaybackUtils_LDFLAGS += -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
