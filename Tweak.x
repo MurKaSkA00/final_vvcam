@@ -1,4 +1,18 @@
-// Tweak.x - MediaPlaybackUtils v1.7.6
+// Tweak.x - MediaPlaybackUtils v1.7.7
+// FIX 5 (v1.7.7):
+//   - В свизле делегата AVCaptureVideoDataOutput тот же use-after-free,
+//     что FIX 3 закрыл для AVSampleBufferDisplayLayer: Instagram/Snapchat/
+//     TikTok/Zoom РЕТЕЙНЯТ sample buffer на фоновую очередь для фильтров.
+//     Синхронный CFRelease(rep) после %orig → refcount=0 в момент, когда
+//     async-потребитель ещё держит буфер → use-after-free → краш на старте
+//     камеры. CFRelease заменён на CFAutorelease.
+//   - Убран дублирующий setSampleBufferDelegate в %hook AVCaptureSession
+//     startRunning — он переустанавливал делегата под уже свизленным классом
+//     и в редких случаях гонялся с активным колбеком, давая EXC_BAD_ACCESS.
+//   - _url больше не имеет hard-coded дефолта 192.168.1.44. Без явно
+//     выставленного rtspURL стрим не стартует — это убирает retry-loop
+//     NSURLSession, который PromonShield / Approov детектят как tampering
+//     и тихо вызывают exit(0).
 // FIX 3:
 //   - PayPal bundle id: com.yourcompany.PPClient (Theos template) -> com.paypal.PPClient
 //   - enqueueSampleBuffer: CFRelease(rep) сразу после %orig вызывал
@@ -30,8 +44,10 @@ CFTimeInterval    _lastBufferTime = 0;
 NSMutableSet     *_mpu_globalHookedClasses = nil;
 id                _mpu_globalHookedLock    = nil;
 
-// === ЛОКАЛЬНОЕ ===
-static NSString             *_url             = @"http://192.168.1.44:8888/live/stream/index.m3u8";
+// ── ЛОКАЛЬНОЕ ───
+// FIX 5: убран hard-coded дефолт 192.168.1.44 — без явного rtspURL из prefs
+// стрим не стартует.
+static NSString             *_url             = nil;
 static _MPUMediaBufferAdapter *_reader        = nil;
 static CIContext            *_v_ciContext     = nil;
 static NSString             *_currentStreamURL = nil;
@@ -74,7 +90,8 @@ static void _v_restartStreamIfNeeded(void) {
             _reader = nil;
             _currentStreamURL = nil;
         }
-        if (!_reader && _enabled) {
+        // FIX 5: без явно сконфигурированного URL стрим НЕ стартуем.
+        if (!_reader && _enabled && _url.length > 0) {
             NSURL *u = [NSURL URLWithString:_url];
             if (!u) return;
             _currentStreamURL = [_url copy];
@@ -243,7 +260,11 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
                         if (use)
                             ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
                              capturedIMP)(self_, sel, output, use, conn);
-                        if (rep) CFRelease(rep);
+                        // FIX 5: CFAutorelease вместо CFRelease — Instagram/Snapchat/
+                        // TikTok/Zoom ретейнят sample buffer на фоновую очередь, и
+                        // синхронный CFRelease ронял буфер → use-after-free → краш
+                        // на старте камеры.
+                        if (rep) CFAutorelease(rep);
                     } @catch (NSException *ex) {
                         NSLog(@"[MPU] hook exception %@: %@", clsName, ex.reason);
                         @try {
@@ -445,22 +466,14 @@ static BOOL _v_shouldSkipClass(NSString *clsName) {
 
 %end
 
-// ── 4. СЕССИЯ ────────────────────────────────────────────────────────────────
+// ── 4. СЕССИЯ ───
 %hook AVCaptureSession
 
 - (void)startRunning {
-    if (_enabled) {
-        _v_init();
-        NSArray *outputs = [self outputs];
-        for (AVCaptureOutput *output in outputs) {
-            if ([output isKindOfClass:[AVCaptureVideoDataOutput class]]) {
-                AVCaptureVideoDataOutput *vdo = (AVCaptureVideoDataOutput *)output;
-                id delegate = vdo.sampleBufferDelegate;
-                dispatch_queue_t queue = vdo.sampleBufferCallbackQueue;
-                if (delegate && queue) [vdo setSampleBufferDelegate:delegate queue:queue];
-            }
-        }
-    }
+    // FIX 5: убрана переустановка делегата под уже свизленным классом —
+    // она гонялась с активным колбеком и давала EXC_BAD_ACCESS на старте.
+    // Делегат уже захвачен в %hook AVCaptureVideoDataOutput setSampleBufferDelegate.
+    if (_enabled) _v_init();
     %orig;
 }
 
