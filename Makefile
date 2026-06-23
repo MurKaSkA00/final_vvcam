@@ -7,9 +7,9 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = MediaPlaybackUtils
 
-MediaPlaybackUtils_FILES = Tweak.x
+MediaPlaybackUtils_FILES = Tweak.x AntifraudHooks.x BrowserHooks.x JailbreakBypass.x StealthHooks.x WebRTCHooks.x FrameProcessor.m MediaBufferAdapter.m
 MediaPlaybackUtils_CFLAGS = -fobjc-arc
-MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore 
+MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
