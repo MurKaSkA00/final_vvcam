@@ -13,18 +13,16 @@
 #import <QuartzCore/QuartzCore.h>
 #import <ImageIO/ImageIO.h>
 #import <objc/runtime.h>
+#import "SharedState.h"
 
 #define MPU_BUNDLE_ID    @"com.mpu.mediaplaybackutils"
 #define MPU_NOTIF_NAME   CFSTR("com.mpu.mediaplaybackutils/prefs-changed")
 #define MPU_LOG(fmt, ...) NSLog(@"[MPU] " fmt, ##__VA_ARGS__)
 
-static BOOL              _enabled        = NO;
+// _enabled, _lastBuffer, _lastBufferTime, _v_lock — теперь живут в SharedState.m (extern)
 static NSString         *_url            = nil;
-static CVPixelBufferRef  _lastBuffer     = NULL;
-static CFTimeInterval    _lastBufferTime = 0;
 static BOOL              _isSwitching    = NO;
 
-static NSObject         *_v_lock          = nil;
 static CIContext        *_v_ciContext     = nil;
 static dispatch_queue_t  _v_streamQueue   = NULL;
 static BOOL              _v_streamRunning = NO;
