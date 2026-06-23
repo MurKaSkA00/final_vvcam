@@ -15,10 +15,28 @@ jobs:
         run: |
           for f in $(grep -rl "<<<<<<< HEAD" . --include="*.x" --include="*.m" --include="*.h" 2>/dev/null); do
             echo "Fixing conflict markers in: $f"
-            # Keep HEAD side (between <<<<<<< HEAD and =======), discard incoming side
             perl -i -0pe '
               s/<<<<<<< [^\n]*\n(.*?)=======\n.*?>>>>>>> [^\n]*\n/$1/gs
             ' "$f"
+          done
+
+      - name: Fix Makefile tabs
+        run: |
+          for f in Makefile prefs/Makefile; do
+            if [ -f "$f" ]; then
+              echo "Fixing tabs in: $f"
+              # convert any run of 2-8 leading spaces in front of non-space chars to a single TAB
+              perl -i -pe 's/^( {2,8})(?=\S)/\t/' "$f"
+              echo "--- $f (last 10 lines, ^I = TAB) ---"
+              cat -A "$f" | tail -10
+            fi
+          done
+
+      - name: Strip BOM and stray non-ASCII from source files
+        run: |
+          for f in $(find . -type f \( -name "*.x" -o -name "*.m" -o -name "*.h" \)); do
+            # strip UTF-8 BOM (EF BB BF) from start of file if present
+            perl -i -pe 'BEGIN{undef $/;} s/^\xEF\xBB\xBF//' "$f"
           done
 
       - name: Setup Theos
@@ -36,6 +54,8 @@ jobs:
           unzip -q master.zip
           find sdks-master -maxdepth 1 -type d -name "*.sdk" -exec mv {} "$HOME/theos/sdks/" \;
           rm -rf master.zip sdks-master
+          echo "--- SDKs installed ---"
+          ls -la "$HOME/theos/sdks/"
 
       - name: Build
         run: |
