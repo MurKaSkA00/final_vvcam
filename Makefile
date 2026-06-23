@@ -1,21 +1,20 @@
+TARGET := iphone:clang:latest:14.0
+ARCHS := arm64
 THEOS_PACKAGE_SCHEME = rootless
-TARGET = iphone:clang:latest:14.0
-ARCHS = arm64
+INSTALL_TARGET_PROCESSES = SpringBoard
 
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = MediaPlaybackUtils
 
-MediaPlaybackUtils_FILES = Tweak.x JailbreakBypass.x StealthHooks.x AntifraudHooks.x \
-WebRTCHooks.x BrowserHooks.x MediaBufferAdapter.m FrameProcessor.m
-
-MediaPlaybackUtils_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable
-
-MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo QuartzCore \
-CoreGraphics CoreImage Foundation ImageIO IOSurface \
-MobileCoreServices VideoToolbox Security
-
-SUBPROJECTS += prefs
+MediaPlaybackUtils_FILES = Tweak.x
+MediaPlaybackUtils_CFLAGS = -fobjc-arc
+MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore IOSurface
 
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+SUBPROJECTS += prefs
 include $(THEOS_MAKE_PATH)/aggregate.mk
+
+after-install::
+	install.exec "killall -9 Preferences || true"
