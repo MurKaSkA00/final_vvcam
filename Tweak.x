@@ -197,9 +197,34 @@ static BOOL _v_shouldRunInThisProcess(void) {
     return YES;
 }
 
-// ── FIX 6: безопасный хук делегата AVCaptureVideoDataOutput по классу ────────
+// ── FIX 8 (v1.8.2): отбраковываем Swift/Kotlin/служебные классы — на них
+//    class_addMethod ломает Swift-layout и валит процессы (Citi, Capital One,
+//    PayPal, банки на Swift/Kotlin-Native). Логика дублирует BrowserHooks/WebRTCHooks.
+static BOOL _v_isUnsafeClassName(const char *cn) {
+    if (!cn || cn[0] == 0) return YES;
+    // Swift mangled: _Tt..., _$s..., _$S...
+    if (cn[0] == '_' && (cn[1] == 'T' || cn[1] == '$')) return YES;
+    // Swift dotted name "Module.Class" / Kotlin-Native ":" / '$' / non-ASCII
+    for (const char *p = cn; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '.' || c == '$' || c == ':' || c >= 0x80) return YES;
+    }
+    if (strncmp(cn, "__NS", 4) == 0) return YES;
+    if (strncmp(cn, "_NS",  3) == 0) return YES;
+    if (strncmp(cn, "OS_",  3) == 0) return YES;
+    return NO;
+}
+
+// ── FIX 6 + FIX 8: безопасный хук делегата AVCaptureVideoDataOutput по классу
 static void _v_hookDelegateClass(Class cls) {
     if (!cls) return;
+    // FIX 8: НЕ трогаем Swift/Kotlin/служебные классы — class_addMethod на
+    // них валит swift_getSingletonMetadata в Citi/PayPal/Capital One/банках.
+    const char *cnRaw = class_getName(cls);
+    if (_v_isUnsafeClassName(cnRaw)) {
+        MPU_LOG(@"skip unsafe delegate class: %s", cnRaw ?: "(null)");
+        return;
+    }
     NSString *cn = NSStringFromClass(cls);
     if (!cn) return;
 
@@ -212,6 +237,7 @@ static void _v_hookDelegateClass(Class cls) {
     if (!m) return;
 
     const char *types = method_getTypeEncoding(m);
+    if (!types) return;
     // capturedIMP — это либо собственная IMP класса, либо унаследованная
     // от суперкласса (legit case). Захватываем ДО class_addMethod.
     __block IMP capturedIMP = method_getImplementation(m);
