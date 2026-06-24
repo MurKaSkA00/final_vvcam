@@ -1,4 +1,4 @@
-"// KYCBypassHooks.x - MediaPlaybackUtils v1.8.0
+// KYCBypassHooks.x - MediaPlaybackUtils v1.8.0
 // =============================================================================
 // Подмена камеры для KYC/банковских/шопинг-приложений.
 //
@@ -32,9 +32,9 @@
 #import <VisionKit/VisionKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-#import \"SharedState.h\"
+#import "SharedState.h"
 
-#define MPU_KYC_LOG(fmt, ...) NSLog(@\"[MPU/KYC] \" fmt, ##__VA_ARGS__)
+#define MPU_KYC_LOG(fmt, ...) NSLog(@"[MPU/KYC] " fmt, ##__VA_ARGS__)
 
 static CIContext *_kyc_ciContext = nil;
 
@@ -105,7 +105,7 @@ static UIImage *_kyc_replacementUIImage(void) {
         if (patched[UIImagePickerControllerEditedImage]) {
             patched[UIImagePickerControllerEditedImage] = fake;
         }
-        MPU_KYC_LOG(@\"UIImagePicker → replaced\");
+        MPU_KYC_LOG(@"UIImagePicker → replaced");
         ((void(*)(id,SEL,UIImagePickerController*,NSDictionary*))origIMP)(self_, sel, picker, patched);
     });
     method_setImplementation(m, newIMP);
@@ -148,9 +148,9 @@ static UIImage *_kyc_replacementUIImage(void) {
         // VNDocumentCameraScan не имеет публичного API для замены страниц.
         // Подменяем через swizzle imageOfPageAtIndex: на этом инстансе через
         // associated object — самый безопасный путь.
-        objc_setAssociatedObject(scan, \"_kyc_fake_image\", fake,
+        objc_setAssociatedObject(scan, "_kyc_fake_image", fake,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        MPU_KYC_LOG(@\"VNDocumentScan → page image hijacked (pages=%lu)\",
+        MPU_KYC_LOG(@"VNDocumentScan → page image hijacked (pages=%lu)",
                     (unsigned long)scan.pageCount);
         ((void(*)(id,SEL,VNDocumentCameraViewController*,VNDocumentCameraScan*))
             origIMP)(self_, sel, vc, scan);
@@ -162,7 +162,7 @@ static UIImage *_kyc_replacementUIImage(void) {
 
 %hook VNDocumentCameraScan
 - (UIImage *)imageOfPageAtIndex:(NSUInteger)index {
-    UIImage *fake = objc_getAssociatedObject(self, \"_kyc_fake_image\");
+    UIImage *fake = objc_getAssociatedObject(self, "_kyc_fake_image");
     if (fake) return fake;
     return %orig;
 }
@@ -192,8 +192,8 @@ static UIImage *_kyc_replacementUIImage(void) {
             AVCapturePhotoOutput *out, AVCapturePhoto *photo, NSError *err) {
             // AVCapturePhoto уже захукан PhotoCaptureHooks.x — accessor'ы
             // вернут наш кадр. Просто передаём в оригинальный делегат.
-            MPU_KYC_LOG(@\"AVCapturePhoto delegate fired (photo=%@)\",
-                        photo ? @\"OK\" : @\"nil\");
+            MPU_KYC_LOG(@"AVCapturePhoto delegate fired (photo=%@)",
+                        photo ? @"OK" : @"nil");
             ((void(*)(id,SEL,AVCapturePhotoOutput*,AVCapturePhoto*,NSError*))
                 origIMP)(self_, sel, out, photo, err);
         });
@@ -216,7 +216,7 @@ static UIImage *_kyc_replacementUIImage(void) {
     if (!ours) return %orig;
     self = %orig(ours, options);
     CVPixelBufferRelease(ours);
-    MPU_KYC_LOG(@\"VNImageRequestHandler(CVPixelBuffer) substituted\");
+    MPU_KYC_LOG(@"VNImageRequestHandler(CVPixelBuffer) substituted");
     return self;
 }
 
@@ -229,7 +229,7 @@ static UIImage *_kyc_replacementUIImage(void) {
     // Принудительно ориентация Up — наш кадр уже как в превью.
     self = %orig(ours, kCGImagePropertyOrientationUp, options);
     CVPixelBufferRelease(ours);
-    MPU_KYC_LOG(@\"VNImageRequestHandler(CVPixelBuffer, orientation) substituted\");
+    MPU_KYC_LOG(@"VNImageRequestHandler(CVPixelBuffer, orientation) substituted");
     return self;
 }
 
@@ -255,28 +255,28 @@ static BOOL _kyc_isTargetProcess(NSString *bid) {
     dispatch_once(&once, ^{
         targets = @[
             // Shopping / маркетплейсы
-            @\"com.amazon.Amazon\",
-            @\"com.ebay.iphone.shopping\",
-            @\"com.poshmark.poshmark\",
-            @\"com.offerup.offerup\",
+            @"com.amazon.Amazon",
+            @"com.ebay.iphone.shopping",
+            @"com.poshmark.poshmark",
+            @"com.offerup.offerup",
             // Payments
-            @\"com.paypal.PPClient\",
-            @\"com.venmo.Venmo\",
-            @\"com.cashapp.squarecash\",
-            @\"com.konylabs.westernunion\",
+            @"com.paypal.PPClient",
+            @"com.venmo.Venmo",
+            @"com.cashapp.squarecash",
+            @"com.konylabs.westernunion",
             // Банки
-            @\"com.chase.sig.ios\",
-            @\"com.bankofamerica.BofAMobileBanking\",
-            @\"com.wellsfargo.wellsfargomobile\",
-            @\"com.key.KeyBank\",
-            @\"com.citigroup.citimobile\",
+            @"com.chase.sig.ios",
+            @"com.bankofamerica.BofAMobileBanking",
+            @"com.wellsfargo.wellsfargomobile",
+            @"com.key.KeyBank",
+            @"com.citigroup.citimobile",
             // Доставка/такси (часто KYC водителя)
-            @\"com.doordash.DoorDash-Consumer\",
+            @"com.doordash.DoorDash-Consumer",
             // Сканеры документов
-            @\"com.adobe.scan.ios\",
-            @\"com.microsoft.Office.Lens\",
-            @\"com.readdle.scanner\",
-            @\"net.doo.DMobile\",
+            @"com.adobe.scan.ios",
+            @"com.microsoft.Office.Lens",
+            @"com.readdle.scanner",
+            @"net.doo.DMobile",
         ];
     });
     for (NSString *t in targets) {
@@ -290,8 +290,8 @@ static BOOL _kyc_isTargetProcess(NSString *bid) {
         NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
         if (!bid) return;
-        if ([path hasPrefix:@\"/usr/\"]) return;
-        if ([path hasPrefix:@\"/System/\"]) return;
+        if ([path hasPrefix:@"/usr/"]) return;
+        if ([path hasPrefix:@"/System/"]) return;
         if (!_kyc_isTargetProcess(bid)) return;
 
         // Подстраховка от nil-locks (Tweak.x %ctor отрабатывает после нас в
@@ -305,7 +305,6 @@ static BOOL _kyc_isTargetProcess(NSString *bid) {
         }
 
         %init;
-        MPU_KYC_LOG(@\"Loaded for %@\", bid);
+        MPU_KYC_LOG(@"Loaded for %@", bid);
     }
 }
-"
