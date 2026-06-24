@@ -33,6 +33,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <substrate.h>
+#include <stdatomic.h>
 #import "SharedState.h"
 
 static atomic_bool _webrtc_scanDone = ATOMIC_VAR_INIT(false);
