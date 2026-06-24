@@ -1,7 +1,5 @@
 // =============================================================================
-// MediaPlaybackUtils — Tweak.x
-// FIX: bundle id + notif name aligned with prefs
-// FIX: stream via _MPUMediaBufferAdapter (HLS + MJPEG)
+// MediaPlaybackUtils — Tweak.x  (FIX: %init + prefs via file + bundle filter)
 // Target: palera1n rootless (Theos rootless scheme).
 // =============================================================================
 
@@ -14,6 +12,7 @@
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <notify.h>
 #import "SharedState.h"
 #import "_MPUMediaBufferAdapter.h"
 
@@ -21,7 +20,6 @@
 #define MPU_NOTIF_NAME CFSTR("com.proximacore.mpu/cfg")
 #define MPU_LOG(fmt, ...) NSLog(@"[MPU] " fmt, ##__VA_ARGS__)
 
-// _enabled, _lastBuffer, _lastBufferTime, _v_lock — живут в SharedState.m (extern)
 static NSString *_url = nil;
 static BOOL _isSwitching = NO;
 
@@ -37,11 +35,34 @@ static void _v_stopStream(void);
 static void _v_restartStreamIfNeeded(void);
 static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef original);
 
-// ── prefs ────────────────────────────────────────────────────────────────────
+// ── prefs: читаем сырой plist (работает из любого sandbox) ──────────────────
+static NSDictionary *_v_readPrefsDict(void) {
+    NSArray *paths = @[
+        @"/var/mobile/Library/Preferences/com.proximacore.mediaplaybackutils.plist",
+        @"/var/jb/var/mobile/Library/Preferences/com.proximacore.mediaplaybackutils.plist",
+        @"/private/var/mobile/Library/Preferences/com.proximacore.mediaplaybackutils.plist",
+    ];
+    for (NSString *p in paths) {
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
+        if (d.count > 0) return d;
+    }
+    // Фолбэк через cfprefsd (работает для Apple-апок типа Камеры)
+    NSMutableDictionary *m = [NSMutableDictionary new];
+    CFPropertyListRef enRef  = CFPreferencesCopyAppValue(CFSTR("enabled"),
+                                  (__bridge CFStringRef)MPU_BUNDLE_ID);
+    CFPropertyListRef urlRef = CFPreferencesCopyAppValue(CFSTR("rtspURL"),
+                                  (__bridge CFStringRef)MPU_BUNDLE_ID);
+    if (enRef)  { m[@"enabled"] = (__bridge id)enRef;  CFRelease(enRef); }
+    if (urlRef) { m[@"rtspURL"] = (__bridge id)urlRef; CFRelease(urlRef); }
+    return m.count ? m : nil;
+}
+
 static void _v_loadPrefs(void) {
-    NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:MPU_BUNDLE_ID];
-    _enabled = [d boolForKey:@"enabled"];
-    NSString *raw = [d stringForKey:@"rtspURL"];
+    NSDictionary *d = _v_readPrefsDict();
+    _enabled = [d[@"enabled"] boolValue];
+    NSString *raw = nil;
+    id rawObj = d[@"rtspURL"];
+    if ([rawObj isKindOfClass:[NSString class]]) raw = (NSString *)rawObj;
     NSString *trimmed = [raw stringByTrimmingCharactersInSet:
                           [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSString *newURL = (trimmed.length > 0) ? [trimmed copy] : @"";
@@ -68,7 +89,11 @@ static void _v_prefsChangedCallback(CFNotificationCenterRef center, void *observ
 static void _v_init(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        _v_lock = [NSObject new];
+        if (!_v_lock) _v_lock = [NSObject new];
+        if (!_mpu_globalHookedClasses) {
+            _mpu_globalHookedClasses = [NSMutableSet new];
+            _mpu_globalHookedLock    = [NSObject new];
+        }
         _v_ciContext = [CIContext contextWithOptions:nil];
         _v_streamQueue = dispatch_queue_create("com.mpu.stream", DISPATCH_QUEUE_SERIAL);
 
@@ -157,9 +182,27 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
     return out;
 }
 
+// ── фильтр: в какие процессы реально пускаем тяжёлую инициализацию ──────────
+static BOOL _v_shouldRunInThisProcess(void) {
+    NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
+    NSString *path = [[NSBundle mainBundle] bundlePath];
+    if (!bid) return NO;
+    if ([bid hasPrefix:@"com.apple.springboard"]) return NO;
+    if ([bid hasPrefix:@"com.apple.mediaserverd"]) return NO;
+    if ([bid hasPrefix:@"com.apple.assetsd"])      return NO;
+    if ([bid hasPrefix:@"com.apple.cameracaptured"]) return NO;
+    if ([bid hasPrefix:@"com.apple.WebKit"])       return NO;
+    if ([path hasPrefix:@"/usr/"])                 return NO;
+    return YES;
+}
+
 // ── ctor ─────────────────────────────────────────────────────────────────────
 %ctor {
-    @autoreleasepool { _v_init(); }
+    @autoreleasepool {
+        if (!_v_shouldRunInThisProcess()) return;
+        _v_init();
+        %init;   // ← КРИТИЧНО: без этого хуки ниже мёртвые
+    }
 }
 
 // ── AVCaptureVideoDataOutput delegate swizzle ────────────────────────────────
