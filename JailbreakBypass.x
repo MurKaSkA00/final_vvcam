@@ -1,16 +1,9 @@
-// JailbreakBypass.x - MediaPlaybackUtils v1.7.7
-// FIX 5 (v1.7.7):
-//   - Bank of America bundle: com.bankofamerica.BofAMobileBank ->
-//     com.bankofamerica.BofAMobileBanking (соответствует Plist-фильтру
-//     и App Store). Без этого bypass-хуки не активировались, и приложение
-//     детектило твик через дефолтный stat("/Library/MobileSubstrate")
-//     → тихий exit() на старте.
-// FIX 3:
-//   - PayPal bundle id (com.yourcompany.PPClient -> com.paypal.PPClient).
-//   - _path_is_blacklisted переписан на чистые C-строки (strcmp/strlen) БЕЗ NSString.
-//     Раньше из хуков open()/stat()/fopen() вызывался [NSString stringWithUTF8String:]
-//     + [NSString hasPrefix:], а NSString сам дёргает open() для локалей -> рекурсия
-//     -> stack overflow -> краш на запуске.
+// JailbreakBypass.x - MediaPlaybackUtils v1.7.9
+// FIX 6 (v1.7.9):
+//   - Добавлен fast-path: пути внутри своего app bundle (а в Cocoa-приложении
+//     это >99% всех open()/stat() на старте — ресурсы, .lproj, шрифты,
+//     asset catalogs) сразу возвращают NO из _path_is_blacklisted БЕЗ
+//     прохода по 50+ строкам. Это снимает основной watchdog-риск твика.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -56,6 +49,12 @@ static NSArray<NSString *> *_jb_targetBundles(void) {
 }
 
 static BOOL _jb_shouldBypass = NO;
+
+// FIX 6: app bundle fast-path
+static char   _jb_app_bundle_path[1024] = {0};
+static size_t _jb_app_bundle_path_len   = 0;
+static char   _jb_app_data_path[1024]   = {0};
+static size_t _jb_app_data_path_len     = 0;
 
 static const char *_jb_blacklist_paths[] = {
     "/Applications/Cydia.app",
@@ -108,20 +107,23 @@ static const char *_jb_blacklist_paths[] = {
 static BOOL _path_is_blacklisted(const char *path) {
     if (!path || path[0] == 0) return NO;
     size_t plen = strlen(path);
+
+    // FIX 6: fast-path — путь внутри app bundle / app sandbox никогда не blacklist
+    if (_jb_app_bundle_path_len > 0 && plen >= _jb_app_bundle_path_len &&
+        memcmp(path, _jb_app_bundle_path, _jb_app_bundle_path_len) == 0) return NO;
+    if (_jb_app_data_path_len > 0 && plen >= _jb_app_data_path_len &&
+        memcmp(path, _jb_app_data_path, _jb_app_data_path_len) == 0) return NO;
+
     for (int i = 0; _jb_blacklist_paths[i]; i++) {
         const char *bad = _jb_blacklist_paths[i];
         size_t blen = strlen(bad);
         if (plen < blen) continue;
-        if (strncmp(path, bad, blen) != 0) continue;
+        if (memcmp(path, bad, blen) != 0) continue;
         if (plen == blen) return YES;
         if (path[blen] == '/') return YES;
     }
     return NO;
 }
-
-// ========================================
-// SYSCALL HOOKS
-// ========================================
 
 static int (*orig_stat)(const char *, struct stat *);
 static int hook_stat(const char *path, struct stat *buf) {
@@ -236,10 +238,6 @@ static void *hook_dlopen(const char *path, int mode) {
     return orig_dlopen(path, mode);
 }
 
-// ========================================
-// ObjC HOOKS
-// ========================================
-
 %hook NSFileManager
 
 - (BOOL)fileExistsAtPath:(NSString *)path {
@@ -303,6 +301,20 @@ static void *hook_dlopen(const char *path, int mode) {
         if (!_jb_shouldBypass) {
             NSLog(@"[MPU/JBBypass] Skipping bypass for: %@", bid);
             return;
+        }
+
+        // FIX 6: запоминаем пути для fast-path
+        NSString *bp = [[NSBundle mainBundle] bundlePath];
+        if (bp) {
+            strlcpy(_jb_app_bundle_path, [bp fileSystemRepresentation],
+                    sizeof(_jb_app_bundle_path));
+            _jb_app_bundle_path_len = strlen(_jb_app_bundle_path);
+        }
+        NSString *home = NSHomeDirectory();
+        if (home) {
+            strlcpy(_jb_app_data_path, [home fileSystemRepresentation],
+                    sizeof(_jb_app_data_path));
+            _jb_app_data_path_len = strlen(_jb_app_data_path);
         }
 
         MSHookFunction((void *)stat,     (void *)hook_stat,     (void **)&orig_stat);
