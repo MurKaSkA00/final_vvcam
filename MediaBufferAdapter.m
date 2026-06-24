@@ -41,8 +41,8 @@
         }];
 
         NSString *path = url.path.lowercaseString ?: @"";
-        _isHLS = [path hasSuffix:@".m3u8"] ||
-                 [url.scheme isEqualToString:@"rtsp"];
+        _isHLS = [path hasSuffix:@".m3u8"];   // AVPlayer не играет rtsp/rtmp — пусть идёт MJPEG-веткой
+
 
         NSLog(@"[MPUAdapter] Initialized url=%@ type=%@",
               url, _isHLS ? @"HLS/AVPlayer" : @"HTTP/MJPEG");
