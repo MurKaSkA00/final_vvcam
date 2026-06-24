@@ -1,15 +1,15 @@
-// BrowserHooks.x - MediaPlaybackUtils v1.7.7
-// FIX 5 (v1.7.7):
-//   - В браузерных процессах Tweak.x %ctor возвращается рано и оставляет
-//     _v_lock = nil. BrowserHooks.x использовал @synchronized(_v_lock) —
-//     это no-op (без локов), и параллельные читатели _lastBuffer
-//     гонялись за CVPixelBufferRetain/Release → double-release → краш
-//     в WebKit GPU/Content процессах. Добавлена инициализация _v_lock.
-// FIX 3:
-//   - Используем общий _mpu_globalHookedClasses из SharedState.h — никаких
-//     двойных swizzle с Tweak.x/WebRTCHooks.x.
-//   - Periodic rescan останавливается через ~60 сек (раньше крутился
-//     бесконечно, что детектировалось как tampering антифрод-движками).
+// BrowserHooks.x - MediaPlaybackUtils v1.8.0
+// FIX 7 (v1.8.0):
+//   - Убран dispatch_source timer, который каждые 2с гонял objc_copyClassList()
+//     из QOS_CLASS_UTILITY. У браузеров (особенно Chrome/Brave) это плодило
+//     гонки со Swift/Kotlin metadata init (та же причина крашей, что
+//     в Amazon/PayPal: swift_getSingletonMetadata at 0x0).
+//   - Скан теперь идёт ТОЛЬКО при AVCaptureSession.startRunning, всегда
+//     с main queue и один раз на сессию.
+//   - Пропускаем Swift/Kotlin/служебные классы (см. _brw_isUnsafeClassName).
+//
+// FIX 5 (наследовано):
+//   - _v_lock = [NSObject new] в %ctor (защита от nil-lock в WebKit процессах).
 
 #import <Foundation/Foundation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -17,29 +17,43 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <substrate.h>
+#import <stdatomic.h>
 #import "SharedState.h"
 
-static dispatch_source_t _brw_timer = nil;
+static atomic_bool _brw_scanDone = ATOMIC_VAR_INIT(false);
 
-static BOOL _brw_isInterestingClass(NSString *n) {
-    if (!n) return NO;
-    return ([n containsString:@"WebCore"] ||
-            [n containsString:@"WebRTC"] ||
-            [n containsString:@"WKVideoCapture"] ||
-            [n containsString:@"WKCapture"] ||
-            [n containsString:@"WKWebRTC"] ||
-            [n containsString:@"RTCCamera"] ||
-            [n containsString:@"RTCVideoCapture"] ||
-            [n containsString:@"RealtimeIncoming"] ||
-            [n containsString:@"RealtimeOutgoing"] ||
-            [n containsString:@"VideoCaptureSource"] ||
-            [n containsString:@"VideoCaptureObserver"] ||
-            [n containsString:@"AVVideoCaptureSource"]);
+static BOOL _brw_isUnsafeClassName(const char *cn) {
+    if (!cn || cn[0] == 0) return YES;
+    if (cn[0] == '_' && (cn[1] == 'T' || cn[1] == '$')) return YES;
+    for (const char *p = cn; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '.' || c == '$' || c == ':' || c >= 0x80) return YES;
+    }
+    if (strncmp(cn, "__NS", 4) == 0) return YES;
+    if (strncmp(cn, "_NS",  3) == 0) return YES;
+    if (strncmp(cn, "OS_",  3) == 0) return YES;
+    return NO;
+}
+
+static BOOL _brw_isInterestingClass(const char *cn) {
+    if (!cn) return NO;
+    return (strstr(cn, "WebCore")           ||
+            strstr(cn, "WebRTC")            ||
+            strstr(cn, "WKVideoCapture")    ||
+            strstr(cn, "WKCapture")         ||
+            strstr(cn, "WKWebRTC")          ||
+            strstr(cn, "RTCCamera")         ||
+            strstr(cn, "RTCVideoCapture")   ||
+            strstr(cn, "RealtimeIncoming")  ||
+            strstr(cn, "RealtimeOutgoing")  ||
+            strstr(cn, "AVVideoCaptureSource"));
 }
 
 static void _brw_hookClass(Class cls) {
     if (!cls) return;
-    NSString *name = NSStringFromClass(cls);
+    const char *cn = class_getName(cls);
+    if (_brw_isUnsafeClassName(cn)) return;
+    NSString *name = [NSString stringWithUTF8String:cn];
     if (!name) return;
 
     @synchronized(_mpu_globalHookedLock) {
@@ -51,6 +65,7 @@ static void _brw_hookClass(Class cls) {
     if (!m) return;
 
     const char *types = method_getTypeEncoding(m);
+    if (!types) return;
     __block IMP capturedIMP = method_getImplementation(m);
 
     IMP newIMP = imp_implementationWithBlock(^(id self_,
@@ -120,7 +135,10 @@ static void _brw_hookClass(Class cls) {
     NSLog(@"[MPU/Browser] Hooked: %@", name);
 }
 
-static void _brw_scan(void) {
+static void _brw_scan_mainThread(void) {
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&_brw_scanDone, &expected, true)) return;
+
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
     if (!classes) return;
@@ -128,40 +146,23 @@ static void _brw_scan(void) {
     for (unsigned int i = 0; i < count; i++) {
         Class cls = classes[i];
         const char *cn = class_getName(cls);
-        if (!cn) continue;
-        NSString *name = [NSString stringWithUTF8String:cn];
-        if (!_brw_isInterestingClass(name)) continue;
+        if (_brw_isUnsafeClassName(cn)) continue;
+        if (!_brw_isInterestingClass(cn)) continue;
         SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
         if (!class_getInstanceMethod(cls, sel)) continue;
         _brw_hookClass(cls);
     }
     free(classes);
-}
-
-static void _brw_startPeriodicScan(void) {
-    dispatch_queue_t q = dispatch_get_global_queue(QOS_CLASS_UTILITY, 0);
-    _brw_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
-    __block int ticks = 0;
-    dispatch_source_set_timer(_brw_timer, DISPATCH_TIME_NOW,
-                              2 * NSEC_PER_SEC, 500 * NSEC_PER_MSEC);
-    dispatch_source_set_event_handler(_brw_timer, ^{
-        _brw_scan();
-        ticks++;
-        if (ticks >= 30) {
-            dispatch_source_cancel(_brw_timer);
-        }
-    });
-    dispatch_resume(_brw_timer);
+    NSLog(@"[MPU/Browser] Scan done (main, %u classes)", count);
 }
 
 %hook AVCaptureSession
 - (void)startRunning {
     %orig;
-    if (_enabled) {
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            _brw_scan();
-        });
-    }
+    if (!_enabled) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        _brw_scan_mainThread();
+    });
 }
 %end
 
@@ -192,18 +193,12 @@ static BOOL _brw_isBrowserProcess(NSString *bid) {
             _mpu_globalHookedClasses = [NSMutableSet new];
             _mpu_globalHookedLock    = [NSObject new];
         }
-        // FIX 5: Tweak.x %ctor возвращается рано для браузерных bid и
-        // оставляет _v_lock = nil → @synchronized(_v_lock) превращался в
-        // no-op без локов → гонки на _lastBuffer → крах WebContent/GPU.
         if (!_v_lock) _v_lock = [NSObject new];
 
         %init;
         NSLog(@"[MPU/Browser] Loaded for %@", bid);
 
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
-                       dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            _brw_scan();
-            _brw_startPeriodicScan();
-        });
+        // FIX 7: НЕТ периодического таймера и НЕТ dispatch_after-скана.
     }
 }
+
