@@ -8,13 +8,38 @@
         <string>Any</string>
         <key>Bundles</key>
         <array>
-            <!-- FIX 3: УБРАНЫ системные XPC-сервисы WebKit.
-                 com.apple.WebKit.GPU/WebContent/Networking/Plugin.64 — это
-                 отдельные процессы Apple. Инжект в них роняет любые приложения
-                 с WebView (банки, Telegram, Twitter, почтовые клиенты),
-                 потому что Tweak.x/WebRTCHooks.x/StealthHooks.x делают там
-                 early-return и оставляют _v_lock = nil, а BrowserHooks.x
-                 продолжает работать с этим nil-локом → гонки и краши. -->
+            <!-- FIX 7 (v1.8.0):
+                 УБРАНЫ из списка инжекта приложения, в которых:
+                   - нет AVCaptureVideoDataOutput-пайплайна;
+                   - крах в swift_getSingletonMetadata из-за гонки
+                     objc_copyClassList ↔ Swift/Kotlin metadata init;
+                   - подменять видео физически нечем (KYC идёт через
+                     встроенные SDK Jumio/Onfido/AmazonRekognition внутри
+                     WebView или нативные VNDocumentCameraView).
+
+                 Удалены:
+                   * com.amazon.Amazon       (KMM → крах GC Timer thread)
+                   * com.paypal.PPClient     (Swift+CoreML → крах)
+                   * com.venmo.Venmo, com.cashapp.squarecash
+                   * Все банки (Chase / BoA / Wells Fargo / KeyBank / WU)
+                   * Mail/scanners/Notes (camera через doc-scanner API)
+                   * Uber/Lyft/Duolingo  (нет видео-капчуры)
+
+                 Оставлены:
+                   - Камера (нативная)
+                   - Мессенджеры с реальной видеосвязью (Telegram, WhatsApp,
+                     Messenger, Skype, Viber, Discord, Teams, Hangouts)
+                   - Видео-звонки (FaceTime, Zoom, Meet, WebEx, Vonage,
+                     RingCentral)
+                   - Соцсети с записью видео и сториз (Instagram, Facebook,
+                     TikTok, Snapchat, Twitter, Pinterest, Reddit, LinkedIn,
+                     Tumblr, BeReal, Locket)
+                   - Стриминг (Twitch, YouTube, Uplive, Kick)
+                   - Знакомства с фото/видео-верификацией (Tinder, Bumble,
+                     Hinge, Grindr, Match, OkCupid)
+                   - Браузеры (через BrowserHooks.x — отдельная безопасная
+                     ветка после FIX 7)
+            -->
 
             <!-- Камера -->
             <string>com.apple.camera</string>
@@ -81,42 +106,15 @@
             <string>com.match.match</string>
             <string>com.okcupid.okcupid</string>
 
-            <!-- Банки / Платежи -->
-            <!-- FIX 3: реальный PayPal в App Store — com.paypal.PPClient.
-                 Старое значение com.yourcompany.PPClient (Theos default
-                 template) НЕ соответствует ни одному приложению — твик
-                 в реальный PayPal вообще не загружался. -->
-            <string>com.paypal.PPClient</string>
-            <string>com.venmo.Venmo</string>
-            <string>com.cashapp.squarecash</string>
-            <string>com.konylabs.westernunion</string>
-            <string>com.chase.sig.ios</string>
-            <string>com.bankofamerica.BofAMobileBanking</string>
-            <string>com.wellsfargo.wellsfargomobile</string>
-            <string>com.key.KeyBank</string>
-
-            <!-- Сканеры -->
-            <string>com.adobe.scan.ios</string>
-            <string>com.microsoft.Office.Lens</string>
-            <string>com.apple.Notes</string>
-            <string>com.readdle.scanner</string>
-            <string>net.doo.DMobile</string>
-
-            <!-- Покупки -->
-            <string>com.amazon.Amazon</string>
-            <string>com.ebay.iphone.shopping</string>
-            <string>com.google.GoogleLens</string>
-            <string>com.poshmark.poshmark</string>
-            <string>com.offerup.offerup</string>
-
-            <!-- Прочее -->
-            <string>com.google.Gmail</string>
-            <string>com.microsoft.Office.Outlook</string>
-            <string>com.apple.mobilemail</string>
-            <string>com.duolingo.duolingo</string>
-            <string>com.ubercab.UberClient</string>
-            <string>com.lyft.ios</string>
+            <!-- FIX 7: УДАЛЕНЫ Banking/Payments/Shopping/Mail/Scanners/Taxi.
+                 Они роняли процесс на старте (см. AmazonIPS/PayPalIPS):
+                 swift_getSingletonMetadata at 0x0 → race с Kotlin/Swift
+                 runtime во время objc_copyClassList(). В этих приложениях
+                 камера используется через AVCapturePhoto / Vision /
+                 встроенные SDK, а не AVCaptureVideoDataOutput — твик там
+                 всё равно ничего полезного сделать не может. -->
         </array>
     </dict>
 </dict>
 </plist>
+
