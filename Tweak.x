@@ -1,6 +1,12 @@
 // =============================================================================
-// MediaPlaybackUtils — Tweak.x  (FIX: %init at end + substrate.h + prefs file)
-// Target: palera1n rootless (Theos rootless scheme).
+// MediaPlaybackUtils — Tweak.x  (v1.7.9)
+// FIX 6 (v1.7.9):
+//   - setSampleBufferDelegate: больше не делает method_setImplementation на
+//     Method, который может быть унаследован от суперкласса (раньше это
+//     ломало все классы-наследники и приводило к stack overflow при втором
+//     открытии камеры в Instagram/Snapchat/TikTok/Tinder/KYC-сканерах).
+//     Вместо этого используется class_addMethod / class_replaceMethod
+//     ПО КЛАССУ делегата с трекингом через _mpu_globalHookedClasses.
 // =============================================================================
 
 #import <Foundation/Foundation.h>
@@ -36,7 +42,6 @@ static void _v_stopStream(void);
 static void _v_restartStreamIfNeeded(void);
 static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef original);
 
-// ── prefs: читаем сырой plist (работает из любого sandbox) ──────────────────
 static NSDictionary *_v_readPrefsDict(void) {
     NSArray *paths = @[
         @"/var/mobile/Library/Preferences/com.proximacore.mediaplaybackutils.plist",
@@ -85,7 +90,6 @@ static void _v_prefsChangedCallback(CFNotificationCenterRef center, void *observ
     _v_loadPrefs();
 }
 
-// ── init ─────────────────────────────────────────────────────────────────────
 static void _v_init(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -107,7 +111,6 @@ static void _v_init(void) {
     });
 }
 
-// ── stream via _MPUMediaBufferAdapter (HLS + MJPEG) ──────────────────────────
 static void _v_startStreamIfNeeded(void) {
     if (_v_streamRunning) return;
     if (_url.length == 0) return;
@@ -152,7 +155,6 @@ static void _v_restartStreamIfNeeded(void) {
     _v_startStreamIfNeeded();
 }
 
-// ── CMSampleBuffer reconstruction ────────────────────────────────────────────
 static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef original) {
     if (!original) return NULL;
     CVPixelBufferRef src = NULL;
@@ -195,44 +197,62 @@ static BOOL _v_shouldRunInThisProcess(void) {
     return YES;
 }
 
-// ── AVCaptureVideoDataOutput delegate swizzle ────────────────────────────────
+// ── FIX 6: безопасный хук делегата AVCaptureVideoDataOutput по классу ────────
+static void _v_hookDelegateClass(Class cls) {
+    if (!cls) return;
+    NSString *cn = NSStringFromClass(cls);
+    if (!cn) return;
+
+    @synchronized(_mpu_globalHookedLock) {
+        if ([_mpu_globalHookedClasses containsObject:cn]) return;
+    }
+
+    SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return;
+
+    const char *types = method_getTypeEncoding(m);
+    // capturedIMP — это либо собственная IMP класса, либо унаследованная
+    // от суперкласса (legit case). Захватываем ДО class_addMethod.
+    __block IMP capturedIMP = method_getImplementation(m);
+
+    IMP newIMP = imp_implementationWithBlock(
+        ^(id self_, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
+            CMSampleBufferRef rep = (_enabled && sb && _url.length > 0)
+                ? _v_makeReplacementSampleBuffer(sb) : NULL;
+            CMSampleBufferRef use = rep ?: sb;
+            ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
+                capturedIMP)(self_, sel, output, use, conn);
+            if (rep) CFRelease(rep);
+        });
+
+    // 1) если у класса НЕТ собственной реализации (унаследована) — add
+    //    добавляет наш IMP, capturedIMP уже корректно указывает на super.
+    // 2) если есть собственная — replace вернёт её, и мы её сохраним.
+    BOOL added = class_addMethod(cls, sel, newIMP, types);
+    if (!added) {
+        IMP prev = class_replaceMethod(cls, sel, newIMP, types);
+        if (prev) capturedIMP = prev;
+    }
+
+    @synchronized(_mpu_globalHookedLock) {
+        [_mpu_globalHookedClasses addObject:cn];
+    }
+    MPU_LOG(@"hooked delegate class: %@", cn);
+}
+
 %hook AVCaptureVideoDataOutput
 
 - (void)setSampleBufferDelegate:(id)delegate
                           queue:(dispatch_queue_t)queue {
     if (!delegate) { %orig; return; }
     _v_init();
-
-    SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
-    Method m = class_getInstanceMethod([delegate class], sel);
-    if (!m) { %orig; return; }
-
-    static const void *kMPUSwizzledKey = &kMPUSwizzledKey;
-    if (objc_getAssociatedObject(delegate, kMPUSwizzledKey)) { %orig; return; }
-    objc_setAssociatedObject(delegate, kMPUSwizzledKey, @YES, OBJC_ASSOCIATION_RETAIN);
-
-    IMP origIMP = method_getImplementation(m);
-    typedef void (*OrigFn)(id, SEL, AVCaptureOutput *, CMSampleBufferRef, AVCaptureConnection *);
-    OrigFn origFn = (OrigFn)origIMP;
-
-    IMP newIMP = imp_implementationWithBlock(
-        ^(id self_, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
-            CMSampleBufferRef rep = (_enabled && sb && _url.length > 0)
-                ? _v_makeReplacementSampleBuffer(sb) : NULL;
-            if (rep) {
-                origFn(self_, sel, output, rep, conn);
-                CFRelease(rep);
-            } else {
-                origFn(self_, sel, output, sb, conn);
-            }
-        });
-    method_setImplementation(m, newIMP);
+    _v_hookDelegateClass(object_getClass(delegate));
     %orig;
 }
 
 %end
 
-// ── ПРЕДПРОСМОТР — AVCaptureVideoPreviewLayer ────────────────────────────────
 %hook AVCaptureVideoPreviewLayer
 
 - (void)layoutSublayers {
@@ -339,7 +359,6 @@ static BOOL _v_shouldRunInThisProcess(void) {
 
 %end
 
-// ── AVSampleBufferDisplayLayer ───────────────────────────────────────────────
 %hook AVSampleBufferDisplayLayer
 
 - (void)enqueueSampleBuffer:(CMSampleBufferRef)sampleBuffer {
@@ -357,7 +376,6 @@ static BOOL _v_shouldRunInThisProcess(void) {
 
 %end
 
-// ── ctor (ОБЯЗАТЕЛЬНО В КОНЦЕ ФАЙЛА — после всех %hook) ──────────────────────
 %ctor {
     @autoreleasepool {
         if (!_v_shouldRunInThisProcess()) return;
