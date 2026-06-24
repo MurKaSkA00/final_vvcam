@@ -1,24 +1,15 @@
-// AntifraudHooks.x - MediaPlaybackUtils v1.7.7
-// FIX 5 (v1.7.7):
-//   - MSHookFunction на NSStringFromClass теперь НЕ ставится в браузерных
-//     и WebKit-процессах. Эта функция дёргается миллионы раз на старте
-//     любого Cocoa-приложения; в WebKit + WebContent + GPU процессах
-//     trampoline иногда не успевал инициализироваться до первого вызова
-//     → SIGSEGV в Foundation до AppDelegate.
-// FIX 4 (v1.7.7) — остаточные launch-crash'и в Instagram / Snapchat / TikTok /
-// банковских приложениях, не исправленные FIX 3:
-//   - hasMediaType: больше не возвращает безусловно YES для AVMediaTypeVideo.
-//     Раньше это превращало микрофон и любые audio/external-устройства в
-//     "видео-устройства". При итерации AVCaptureDevice.devices приложение
-//     создавало AVCaptureDeviceInput с audio-устройством как video-source ->
-//     nil + NSException -> краш при запуске камеры.
-//   - position: больше не подменяет Unspecified на Back для ВСЕХ устройств.
-//     Микрофоны/внешние устройства легитимно Unspecified — насильственный
-//     Back ломал FSM AVCaptureSession в Instagram/Snapchat (краш на
-//     -[AVCaptureSession addInput:]).
-//   - localizedName: убрана подстрока "Media" из чёрного списка — она
-//     совпадала со штатными системными именами и подменяла их на
-//     "Back Camera", путая Instagram и сканеры.
+// AntifraudHooks.x - MediaPlaybackUtils v1.7.9
+// FIX 6 (v1.7.9):
+//   - УБРАН MSHookFunction(NSStringFromClass). Эта функция вызывается
+//     миллионы раз на старте, а dispatch_async-установка trampoline'а
+//     создавала окно SIGSEGV на NULL (orig_NSStringFromClass еще не
+//     инициализирован, а calls уже идут через jmp). Классы и так
+//     с префиксом _MPU и не светятся в NSBundle.allBundles (см. Stealth).
+//   - Сужена маска NSUserDefaults: только префиксы "MediaPlaybackUtils",
+//     "proximacore", "MPUStream" (раньше containsString:@"MPU" ловил
+//     системные ключи вроде "_UIKitMPU*", из-за чего часть фреймворков
+//     SDK не получали свои настройки и тихо exit'или).
+//   - %hook NSProcessInfo - environment вызывает %orig ровно один раз.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -32,29 +23,11 @@
 #import <substrate.h>
 #import "SharedState.h"
 
-static NSString *(*orig_NSStringFromClass)(Class) = NULL;
-
-static NSString *hook_NSStringFromClass(Class cls) {
-    NSString *r = orig_NSStringFromClass(cls);
-    if (!r) return r;
-    // FIX 5: классы названы с ПРЕФИКСОМ _MPU (например _MPUMediaBufferAdapter,
-    // _MPUFrameProcessor). Старый код проверял hasSuffix:@"_MPU" — он никогда
-    // не срабатывал, и PromonShield (PayPal/банки) ловил наши классы по имени
-    // через objc_copyClassList -> приложение тихо закрывалось.
-    if ([r hasPrefix:@"_MPU"]) {
-        return [@"NS" stringByAppendingString:[r substringFromIndex:4]];
-    }
-    return r;
-}
-
-
 %hook AVCaptureDevice
 
 - (NSString *)localizedName {
     NSString *name = %orig;
     if (!name) return name;
-    // FIX 4: убрана подстрока "Media" — слишком широкая, ломала
-    // легитимные имена системных устройств.
     if ([name containsString:@"MPU"] || [name containsString:@"Virtual"] ||
         [name containsString:@"Stream"] || [name containsString:@"Tweak"] ||
         [name containsString:@"Proxima"]) {
@@ -73,9 +46,7 @@ static NSString *hook_NSStringFromClass(Class cls) {
 }
 
 - (AVCaptureDevicePosition)position {
-    AVCaptureDevicePosition p = %orig;
-    // FIX 4: НЕ подменяем Unspecified на Back для всех устройств подряд.
-    return p;
+    return %orig;
 }
 
 - (AVCaptureDeviceType)deviceType {
@@ -88,14 +59,12 @@ static NSString *hook_NSStringFromClass(Class cls) {
 }
 
 - (BOOL)hasMediaType:(AVMediaType)mediaType {
-    // FIX 4: больше не врём про hasMediaType:.
     return %orig;
 }
 
 %end
 
 %hook AVCaptureConnection
-// FIX 3: вернули %orig — иначе AVCaptureSession бросал на commitConfiguration.
 - (BOOL)isVideoMirroringSupported { return %orig; }
 - (BOOL)isVideoOrientationSupported { return %orig; }
 %end
@@ -110,8 +79,9 @@ static NSString *hook_NSStringFromClass(Class cls) {
 
 %hook NSProcessInfo
 - (NSDictionary<NSString *, NSString *> *)environment {
-    NSMutableDictionary *env = [%orig mutableCopy];
-    if (!env) return %orig;
+    NSDictionary *orig = %orig;       // FIX 6: один вызов
+    if (!orig) return nil;
+    NSMutableDictionary *env = [orig mutableCopy];
     [env removeObjectForKey:@"DYLD_INSERT_LIBRARIES"];
     [env removeObjectForKey:@"_MSSafeMode"];
     [env removeObjectForKey:@"_SafeMode"];
@@ -131,9 +101,11 @@ static NSString *hook_NSStringFromClass(Class cls) {
 
 %hook NSUserDefaults
 - (id)objectForKey:(NSString *)key {
-    if (key && ([key containsString:@"MediaPlaybackUtils"] ||
-                [key containsString:@"proximacore"] ||
-                [key containsString:@"MPU"])) return nil;
+    // FIX 6: только префиксы, не containsString — иначе ловили системные ключи
+    if (key && ([key hasPrefix:@"MediaPlaybackUtils"] ||
+                [key hasPrefix:@"proximacore"] ||
+                [key hasPrefix:@"MPUStream"] ||
+                [key hasPrefix:@"com.proximacore"])) return nil;
     return %orig;
 }
 %end
@@ -171,8 +143,6 @@ static NSString *hook_NSStringFromClass(Class cls) {
         if ([bid isEqualToString:@"xyz.willy.Zebra"]) return;
         if ([bid hasPrefix:@"com.opa334."]) return;
         if ([bid hasPrefix:@"com.palera1n"]) return;
-        // FIX 5: пропускаем браузеры и WebKit-XPC процессы — MSHookFunction
-        // на NSStringFromClass в них ронял Safari/Chrome до AppDelegate.
         if ([bid hasPrefix:@"com.apple.WebKit"])       return;
         if ([bid hasPrefix:@"com.apple.mobilesafari"]) return;
         if ([bid hasPrefix:@"com.google.chrome"])      return;
@@ -184,12 +154,8 @@ static NSString *hook_NSStringFromClass(Class cls) {
         if ([bid hasPrefix:@"com.ddg.ios"])            return;
         if ([bid hasPrefix:@"com.kagi"])               return;
 
-        dispatch_async(dispatch_get_main_queue(), ^{
-            MSHookFunction((void *)NSStringFromClass,
-                           (void *)hook_NSStringFromClass,
-                           (void **)&orig_NSStringFromClass);
-            %init;
-            NSLog(@"[MPU/AntiIntrospect] Installed for %@", bid);
-        });
+        // FIX 6: убран MSHookFunction(NSStringFromClass) — только %init
+        %init;
+        NSLog(@"[MPU/AntiIntrospect] Installed for %@", bid);
     }
 }
