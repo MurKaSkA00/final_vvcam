@@ -1,5 +1,5 @@
 // =============================================================================
-// MediaPlaybackUtils — Tweak.x  (FIX: %init + prefs via file + bundle filter)
+// MediaPlaybackUtils — Tweak.x  (FIX: %init at end + substrate.h + prefs file)
 // Target: palera1n rootless (Theos rootless scheme).
 // =============================================================================
 
@@ -12,6 +12,7 @@
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <substrate.h>
 #import <notify.h>
 #import "SharedState.h"
 #import "_MPUMediaBufferAdapter.h"
@@ -46,7 +47,6 @@ static NSDictionary *_v_readPrefsDict(void) {
         NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:p];
         if (d.count > 0) return d;
     }
-    // Фолбэк через cfprefsd (работает для Apple-апок типа Камеры)
     NSMutableDictionary *m = [NSMutableDictionary new];
     CFPropertyListRef enRef  = CFPreferencesCopyAppValue(CFSTR("enabled"),
                                   (__bridge CFStringRef)MPU_BUNDLE_ID);
@@ -182,7 +182,6 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
     return out;
 }
 
-// ── фильтр: в какие процессы реально пускаем тяжёлую инициализацию ──────────
 static BOOL _v_shouldRunInThisProcess(void) {
     NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
     NSString *path = [[NSBundle mainBundle] bundlePath];
@@ -194,15 +193,6 @@ static BOOL _v_shouldRunInThisProcess(void) {
     if ([bid hasPrefix:@"com.apple.WebKit"])       return NO;
     if ([path hasPrefix:@"/usr/"])                 return NO;
     return YES;
-}
-
-// ── ctor ─────────────────────────────────────────────────────────────────────
-%ctor {
-    @autoreleasepool {
-        if (!_v_shouldRunInThisProcess()) return;
-        _v_init();
-        %init;   // ← КРИТИЧНО: без этого хуки ниже мёртвые
-    }
 }
 
 // ── AVCaptureVideoDataOutput delegate swizzle ────────────────────────────────
@@ -366,3 +356,12 @@ static BOOL _v_shouldRunInThisProcess(void) {
 }
 
 %end
+
+// ── ctor (ОБЯЗАТЕЛЬНО В КОНЦЕ ФАЙЛА — после всех %hook) ──────────────────────
+%ctor {
+    @autoreleasepool {
+        if (!_v_shouldRunInThisProcess()) return;
+        _v_init();
+        %init;
+    }
+}
