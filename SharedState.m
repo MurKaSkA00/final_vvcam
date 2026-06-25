@@ -1,4 +1,4 @@
-// SharedState.h - MediaPlaybackUtils v1.8.4
+// SharedState.h - MediaPlaybackUtils v1.8.5
 #ifndef SHARED_STATE_H
 #define SHARED_STATE_H
 
