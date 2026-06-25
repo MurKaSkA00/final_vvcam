@@ -1,24 +1,36 @@
-// KYCBypassHooks.x - MediaPlaybackUtils v1.8.0
+// KYCBypassHooks.x - MediaPlaybackUtils v1.8.3
 // =============================================================================
 // Подмена камеры для KYC/банковских/шопинг-приложений.
 //
-// ВАЖНО: этот модуль НИКОГДА не делает objc_copyClassList и НИКОГДА не делает
-// class_addMethod на пользовательских классах — именно это ломало Amazon/PayPal.
-// Только статические %hook на системных классах + прокси-делегаты.
+// FIX 9 (v1.8.3) — устранены краши Citibank / Capital One (EASEApp) / Widgets /
+// navd / destinationd / mapspushd:
 //
-// Покрытие:
-//   1. VNDocumentCameraViewController  (системный сканер документов в Notes,
-//      Adobe Scan, Office Lens, банки используют для подтверждения адреса)
-//   2. UIImagePickerController  (legacy: загрузка паспорта/чека через камеру)
-//   3. AVCapturePhotoOutput.capturePhotoWithSettings:delegate: — прокси-делегат,
-//      подмена самого AVCapturePhoto. (Дублирует PhotoCaptureHooks на уровень
-//      выше — на случай, если приложение читает delegate-методы хитро.)
-//   4. VNImageRequestHandler init* — подменяем входной buffer на наш кадр,
-//      что отравляет распознавание лица в KYC.
+//   1) %ctor больше НЕ создаёт CIContext. Это валило системные сервисы карт
+//      без GPU (CIContext init → краш). Теперь _kyc_ciContext получается
+//      лениво через общий _mpu_ciContextShared() (Metal → software fallback).
 //
-// Загружается ТОЛЬКО в bundle'ах из _kyc_targetBundles ниже (отдельный
-// список от MediaPlaybackUtils.plist — мы НЕ полагаемся на CydiaSubstrate
-// фильтр для этого модуля).
+//   2) Делегатные хуки UIImagePickerController / VNDocumentCameraViewController /
+//      AVCapturePhotoOutput раньше делали method_setImplementation на Method,
+//      который мог быть УНАСЛЕДОВАН от superclass (Citibank/Capital One — это
+//      Swift/ObjC SDK с глубокой иерархией делегатов). Это меняло реализацию
+//      В СУПЕРКЛАССЕ и ломало ВСЕ его другие подклассы → отсюда краш
+//      \"objc_msgSend в IdentitySilentMobileAuth SDK\" и
+//      \"_platform_memcmp → MediaPlaybackUtils.dylib\".
+//
+//      Теперь используется правильный паттерн (как в Tweak.x FIX 6):
+//        - skip Swift/Kotlin/служебных классов (_mpu_isUnsafeClassName)
+//        - class_addMethod(cls, sel, newIMP, types) — если YES, в leaf-класс
+//          добавлен наш override, capturedIMP указывает на super (корректно).
+//        - если NO — класс уже имеет свою IMP, делаем class_replaceMethod
+//          и сохраняем prev как capturedIMP.
+//        - трекинг через _mpu_globalHookedClasses — никаких повторных хуков.
+//
+//   3) %ctor использует общий _mpu_processIsLoadable() — отбрасывает
+//      .appex (Widgets), системные демоны, /System/, /usr/, com.apple.*.
+//
+//   4) VNDocumentCameraScan imageOfPageAtIndex: используется только если
+//      ассоциированный fake image присутствует — без побочных эффектов на
+//      другие приложения.
 // =============================================================================
 
 #import <Foundation/Foundation.h>
@@ -32,11 +44,9 @@
 #import <VisionKit/VisionKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-#import "SharedState.h"
+#import \"SharedState.h\"
 
-#define MPU_KYC_LOG(fmt, ...) NSLog(@"[MPU/KYC] " fmt, ##__VA_ARGS__)
-
-static CIContext *_kyc_ciContext = nil;
+#define MPU_KYC_LOG(fmt, ...) NSLog(@\"[MPU/KYC] \" fmt, ##__VA_ARGS__)
 
 // ── общий helper: текущий заменяющий pixel buffer (retained) ─────────────────
 static CVPixelBufferRef _kyc_copyBuffer(void) CF_RETURNS_RETAINED {
@@ -50,10 +60,12 @@ static CVPixelBufferRef _kyc_copyBuffer(void) CF_RETURNS_RETAINED {
 
 // CGImage из pixel buffer (CGImageRelease на стороне вызывающего)
 static CGImageRef _kyc_createCGImage(CVPixelBufferRef pb) CF_RETURNS_RETAINED {
-    if (!pb || !_kyc_ciContext) return NULL;
+    if (!pb) return NULL;
+    CIContext *ctx = _mpu_ciContextShared();
+    if (!ctx) return NULL;
     CIImage *ci = [CIImage imageWithCVPixelBuffer:pb];
     if (!ci) return NULL;
-    return [_kyc_ciContext createCGImage:ci fromRect:ci.extent];
+    return [ctx createCGImage:ci fromRect:ci.extent];
 }
 
 static UIImage *_kyc_replacementUIImage(void) {
@@ -69,6 +81,59 @@ static UIImage *_kyc_replacementUIImage(void) {
 }
 
 // =============================================================================
+// FIX 9 (v1.8.3): универсальный безопасный delegate-hook helper.
+// Заменяет старый method_setImplementation(m, newIMP), который ломал
+// унаследованные методы в Citi / Capital One.
+//
+//   cls   — класс делегата (object_getClass(delegate))
+//   sel   — селектор делегатного метода
+//   block — Objective-C блок-обёртка, ВНУТРИ которой вызывается capturedIMP:
+//           ((void(*)(id,SEL,...))capturedIMP)(self_, sel, ...)
+//
+// Возвращает YES при успешном хуке (или если класс уже захукан),
+// NO — если класс пропущен (Swift/Kotlin/служебный) или метод не найден.
+// =============================================================================
+static BOOL _kyc_hookClassMethod(Class cls, SEL sel,
+                                  const char **outTypes, IMP newIMP,
+                                  IMP *outCapturedIMP)
+{
+    if (!cls || !sel || !newIMP || !outCapturedIMP) return NO;
+
+    const char *cnRaw = class_getName(cls);
+    if (_mpu_isUnsafeClassName(cnRaw)) {
+        MPU_KYC_LOG(@\"skip unsafe delegate class: %s\", cnRaw ?: \"(null)\");
+        return NO;
+    }
+    NSString *cn = NSStringFromClass(cls);
+    if (!cn) return NO;
+
+    @synchronized(_mpu_globalHookedLock) {
+        if ([_mpu_globalHookedClasses containsObject:cn]) return YES;
+    }
+
+    Method m = class_getInstanceMethod(cls, sel);
+    if (!m) return NO;
+    const char *types = method_getTypeEncoding(m);
+    if (!types) return NO;
+    if (outTypes) *outTypes = types;
+
+    // Сначала capturedIMP — это либо собственная IMP класса, либо унаследованная.
+    *outCapturedIMP = method_getImplementation(m);
+
+    BOOL added = class_addMethod(cls, sel, newIMP, types);
+    if (!added) {
+        IMP prev = class_replaceMethod(cls, sel, newIMP, types);
+        if (prev) *outCapturedIMP = prev;
+    }
+
+    @synchronized(_mpu_globalHookedLock) {
+        [_mpu_globalHookedClasses addObject:cn];
+    }
+    MPU_KYC_LOG(@\"hooked %@ on class %@\", NSStringFromSelector(sel), cn);
+    return YES;
+}
+
+// =============================================================================
 // 1. UIImagePickerController — legacy путь (загрузка фото из камеры)
 // =============================================================================
 %hook UIImagePickerController
@@ -78,26 +143,19 @@ static UIImage *_kyc_replacementUIImage(void) {
     if (!delegate) return;
     Class cls = object_getClass(delegate);
     SEL sel = @selector(imagePickerController:didFinishPickingMediaWithInfo:);
-    if (!class_getInstanceMethod(cls, sel)) return;
 
-    // Per-instance swizzle через associated object, чтобы НЕ трогать класс
-    // (избегаем class_addMethod на пользовательском классе).
-    static const void *kFlag = &kFlag;
-    if (objc_getAssociatedObject(delegate, kFlag)) return;
-    objc_setAssociatedObject(delegate, kFlag, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    Method m = class_getInstanceMethod(cls, sel);
-    IMP origIMP = method_getImplementation(m);
-
+    __block IMP capturedIMP = NULL;
+    const char *types = NULL;
     IMP newIMP = imp_implementationWithBlock(^(id self_,
         UIImagePickerController *picker, NSDictionary *info) {
+        if (!capturedIMP) return;
         if (!_enabled) {
-            ((void(*)(id,SEL,UIImagePickerController*,NSDictionary*))origIMP)(self_, sel, picker, info);
+            ((void(*)(id,SEL,UIImagePickerController*,NSDictionary*))capturedIMP)(self_, sel, picker, info);
             return;
         }
         UIImage *fake = _kyc_replacementUIImage();
         if (!fake) {
-            ((void(*)(id,SEL,UIImagePickerController*,NSDictionary*))origIMP)(self_, sel, picker, info);
+            ((void(*)(id,SEL,UIImagePickerController*,NSDictionary*))capturedIMP)(self_, sel, picker, info);
             return;
         }
         NSMutableDictionary *patched = [info mutableCopy];
@@ -105,10 +163,13 @@ static UIImage *_kyc_replacementUIImage(void) {
         if (patched[UIImagePickerControllerEditedImage]) {
             patched[UIImagePickerControllerEditedImage] = fake;
         }
-        MPU_KYC_LOG(@"UIImagePicker → replaced");
-        ((void(*)(id,SEL,UIImagePickerController*,NSDictionary*))origIMP)(self_, sel, picker, patched);
+        MPU_KYC_LOG(@\"UIImagePicker → replaced\");
+        ((void(*)(id,SEL,UIImagePickerController*,NSDictionary*))capturedIMP)(self_, sel, picker, patched);
     });
-    method_setImplementation(m, newIMP);
+
+    if (!_kyc_hookClassMethod(cls, sel, &types, newIMP, &capturedIMP)) {
+        imp_removeBlock(newIMP);
+    }
 }
 
 %end
@@ -123,46 +184,41 @@ static UIImage *_kyc_replacementUIImage(void) {
     if (!delegate) return;
     Class cls = object_getClass(delegate);
     SEL sel = @selector(documentCameraViewController:didFinishWithScan:);
-    if (!class_getInstanceMethod(cls, sel)) return;
 
-    static const void *kFlag = &kFlag;
-    if (objc_getAssociatedObject(delegate, kFlag)) return;
-    objc_setAssociatedObject(delegate, kFlag, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    Method m = class_getInstanceMethod(cls, sel);
-    IMP origIMP = method_getImplementation(m);
-
+    __block IMP capturedIMP = NULL;
+    const char *types = NULL;
     IMP newIMP = imp_implementationWithBlock(^(id self_,
         VNDocumentCameraViewController *vc, VNDocumentCameraScan *scan) {
+        if (!capturedIMP) return;
         if (!_enabled || !scan || scan.pageCount == 0) {
             ((void(*)(id,SEL,VNDocumentCameraViewController*,VNDocumentCameraScan*))
-                origIMP)(self_, sel, vc, scan);
+                capturedIMP)(self_, sel, vc, scan);
             return;
         }
         UIImage *fake = _kyc_replacementUIImage();
         if (!fake) {
             ((void(*)(id,SEL,VNDocumentCameraViewController*,VNDocumentCameraScan*))
-                origIMP)(self_, sel, vc, scan);
+                capturedIMP)(self_, sel, vc, scan);
             return;
         }
-        // VNDocumentCameraScan не имеет публичного API для замены страниц.
-        // Подменяем через swizzle imageOfPageAtIndex: на этом инстансе через
-        // associated object — самый безопасный путь.
-        objc_setAssociatedObject(scan, "_kyc_fake_image", fake,
+        objc_setAssociatedObject(scan, \"_kyc_fake_image\", fake,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        MPU_KYC_LOG(@"VNDocumentScan → page image hijacked (pages=%lu)",
+        MPU_KYC_LOG(@\"VNDocumentScan → page image hijacked (pages=%lu)\",
                     (unsigned long)scan.pageCount);
         ((void(*)(id,SEL,VNDocumentCameraViewController*,VNDocumentCameraScan*))
-            origIMP)(self_, sel, vc, scan);
+            capturedIMP)(self_, sel, vc, scan);
     });
-    method_setImplementation(m, newIMP);
+
+    if (!_kyc_hookClassMethod(cls, sel, &types, newIMP, &capturedIMP)) {
+        imp_removeBlock(newIMP);
+    }
 }
 
 %end
 
 %hook VNDocumentCameraScan
 - (UIImage *)imageOfPageAtIndex:(NSUInteger)index {
-    UIImage *fake = objc_getAssociatedObject(self, "_kyc_fake_image");
+    UIImage *fake = objc_getAssociatedObject(self, \"_kyc_fake_image\");
     if (fake) return fake;
     return %orig;
 }
@@ -170,9 +226,6 @@ static UIImage *_kyc_replacementUIImage(void) {
 
 // =============================================================================
 // 3. AVCapturePhotoOutput.capturePhotoWithSettings:delegate: — прокси-делегат
-//    Дублирует защиту PhotoCaptureHooks: если приложение перехватывает кадр
-//    в самом делегате (а не через accessors на AVCapturePhoto), мы успеваем
-//    подменить ДО передачи в делегат.
 // =============================================================================
 %hook AVCapturePhotoOutput
 
@@ -181,23 +234,20 @@ static UIImage *_kyc_replacementUIImage(void) {
     if (!_enabled || !delegate) { %orig; return; }
     Class cls = object_getClass(delegate);
     SEL sel = @selector(captureOutput:didFinishProcessingPhoto:error:);
-    Method m = class_getInstanceMethod(cls, sel);
-    if (!m) { %orig; return; }
 
-    static const void *kFlag = &kFlag;
-    if (!objc_getAssociatedObject(delegate, kFlag)) {
-        objc_setAssociatedObject(delegate, kFlag, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        IMP origIMP = method_getImplementation(m);
-        IMP newIMP = imp_implementationWithBlock(^(id self_,
-            AVCapturePhotoOutput *out, AVCapturePhoto *photo, NSError *err) {
-            // AVCapturePhoto уже захукан PhotoCaptureHooks.x — accessor'ы
-            // вернут наш кадр. Просто передаём в оригинальный делегат.
-            MPU_KYC_LOG(@"AVCapturePhoto delegate fired (photo=%@)",
-                        photo ? @"OK" : @"nil");
-            ((void(*)(id,SEL,AVCapturePhotoOutput*,AVCapturePhoto*,NSError*))
-                origIMP)(self_, sel, out, photo, err);
-        });
-        method_setImplementation(m, newIMP);
+    __block IMP capturedIMP = NULL;
+    const char *types = NULL;
+    IMP newIMP = imp_implementationWithBlock(^(id self_,
+        AVCapturePhotoOutput *out, AVCapturePhoto *photo, NSError *err) {
+        if (!capturedIMP) return;
+        MPU_KYC_LOG(@\"AVCapturePhoto delegate fired (photo=%@)\",
+                    photo ? @\"OK\" : @\"nil\");
+        ((void(*)(id,SEL,AVCapturePhotoOutput*,AVCapturePhoto*,NSError*))
+            capturedIMP)(self_, sel, out, photo, err);
+    });
+
+    if (!_kyc_hookClassMethod(cls, sel, &types, newIMP, &capturedIMP)) {
+        imp_removeBlock(newIMP);
     }
     %orig;
 }
@@ -216,7 +266,7 @@ static UIImage *_kyc_replacementUIImage(void) {
     if (!ours) return %orig;
     self = %orig(ours, options);
     CVPixelBufferRelease(ours);
-    MPU_KYC_LOG(@"VNImageRequestHandler(CVPixelBuffer) substituted");
+    MPU_KYC_LOG(@\"VNImageRequestHandler(CVPixelBuffer) substituted\");
     return self;
 }
 
@@ -226,10 +276,9 @@ static UIImage *_kyc_replacementUIImage(void) {
     if (!_enabled) return %orig;
     CVPixelBufferRef ours = _kyc_copyBuffer();
     if (!ours) return %orig;
-    // Принудительно ориентация Up — наш кадр уже как в превью.
     self = %orig(ours, kCGImagePropertyOrientationUp, options);
     CVPixelBufferRelease(ours);
-    MPU_KYC_LOG(@"VNImageRequestHandler(CVPixelBuffer, orientation) substituted");
+    MPU_KYC_LOG(@\"VNImageRequestHandler(CVPixelBuffer, orientation) substituted\");
     return self;
 }
 
@@ -246,44 +295,27 @@ static UIImage *_kyc_replacementUIImage(void) {
 %end
 
 // =============================================================================
-// ctor — загружаемся ТОЛЬКО в KYC/банковских процессах
+// ctor — единый общий gatekeeper, без CIContext init
 // =============================================================================
-// FIX (v1.8.1): убран whitelist — KYC-хуки безопасны (только delegate-swizzle,
-// никаких objc_copyClassList / class_addMethod на пользовательских классах),
-// поэтому грузимся во всех приложениях, где загрузился .dylib.
-static BOOL _kyc_isTargetProcess(NSString *bid) {
-    if (!bid) return NO;
-    // Не лезем в служебные/системные процессы — на всякий случай.
-    if ([bid hasPrefix:@"com.apple."]) {
-        // Разрешаем только Safari/Camera/FaceTime — там может быть KYC через WebView.
-        if ([bid isEqualToString:@"com.apple.mobilesafari"]) return YES;
-        if ([bid isEqualToString:@"com.apple.camera"]) return YES;
-        if ([bid isEqualToString:@"com.apple.facetime"]) return YES;
-        return NO;
-    }
-    return YES;
-}
-
 %ctor {
     @autoreleasepool {
-        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
-        NSString *path = [[NSBundle mainBundle] bundlePath];
-        if (!bid) return;
-        if ([path hasPrefix:@"/usr/"]) return;
-        if ([path hasPrefix:@"/System/"]) return;
-        if (!_kyc_isTargetProcess(bid)) return;
+        // FIX 9 (v1.8.3): общий gatekeeper отбрасывает все .appex / системные
+        // демоны / com.apple.* / /System/ / /usr/ . Это убирает краши в
+        // Widgets (FBLPromises), navd, destinationd, mapspushd.
+        if (!_mpu_processIsLoadable()) return;
 
-        // Подстраховка от nil-locks (Tweak.x %ctor отрабатывает после нас в
-        // редких случаях — например, если KYC SDK триггерит +load очень рано).
+        // FIX 9: НЕ создаём CIContext в %ctor! Раньше [CIContext contextWithOptions:]
+        // падал в системных сервисах без GPU. Теперь — лениво через
+        // _mpu_ciContextShared() в _kyc_createCGImage().
+
+        // Подстраховка от nil-locks
         if (!_v_lock) _v_lock = [NSObject new];
-
-        if (!_kyc_ciContext) {
-            _kyc_ciContext = [CIContext contextWithOptions:@{
-                kCIContextUseSoftwareRenderer: @NO
-            }];
+        if (!_mpu_globalHookedClasses) {
+            _mpu_globalHookedClasses = [NSMutableSet new];
+            _mpu_globalHookedLock    = [NSObject new];
         }
 
         %init;
-        MPU_KYC_LOG(@"Loaded for %@", bid);
+        MPU_KYC_LOG(@\"Loaded for %@\", [[NSBundle mainBundle] bundleIdentifier]);
     }
 }
