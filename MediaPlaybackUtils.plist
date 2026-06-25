@@ -1,22 +1,9 @@
-<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
-<plist version=\"1.0\">
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
 <dict>
     <key>Filter</key>
     <dict>
-        <!--
-          FIX 9 (v1.8.3): убран Mode=Any + Executables-блок.
-          Раньше Executables[SpringBoard, mediaserverd, ...] из-за Mode=Any
-          трактовался MobileSubstrate как ДОПОЛНИТЕЛЬНОЕ условие загрузки
-          (а не блэклист!), поэтому твик грузился в SpringBoard, mediaserverd
-          и т.п. — отсюда краши.
-
-          Теперь единственный фильтр — Bundles: com.apple.AVFoundation.
-          Все остальные исключения (системные сервисы, app-extensions,
-          навигационные демоны, /System/, /usr/, .appex и т.п.) делаются
-          в runtime в SharedState._mpu_processIsLoadable() → каждый
-          модуль вызывает его в %ctor и сразу return-ит если NO.
-        -->
         <key>Bundles</key>
         <array>
             <string>com.apple.AVFoundation</string>
