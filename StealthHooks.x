@@ -224,20 +224,41 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
     @autoreleasepool {
         NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
+        NSString *exe  = [[NSBundle mainBundle] executablePath];
         if (!bid) return;
 
-        if ([bid hasPrefix:@"com.apple."]) return;
-        if ([path hasPrefix:@"/usr/"]) return;
-        if ([path hasPrefix:@"/System/"]) return;
-        if ([bid isEqualToString:@"org.coolstar.SileoStore"]) return;
-        if ([bid isEqualToString:@"com.tigisoftware.Filza"]) return;
-        if ([bid isEqualToString:@"xyz.willy.Zebra"]) return;
-        if ([bid hasPrefix:@"com.opa334.TrollStore"]) return;
-        if ([bid hasPrefix:@"com.palera1n"]) return;
+        // FIX 9: НЕ грузимся в app-extensions / системные сервисы
+        if ([path hasSuffix:@".appex"])       return;
+        if ([path containsString:@".appex/"]) return;
+        if ([bid hasSuffix:@".widget"])       return;
+        if ([bid hasSuffix:@".widgets"])      return;
+        if ([bid containsString:@".widget."]) return;
+        if ([bid hasSuffix:@".extension"])    return;
+        if ([bid containsString:@".extension."]) return;
+        if ([bid hasSuffix:@".intents"])      return;
+        if ([bid hasSuffix:@".ShareExtension"]) return;
+        if ([bid hasSuffix:@".NotificationServiceExtension"]) return;
 
-        // FIX 6: ставим хуки СИНХРОННО — иначе ранние вызовы dyld из +load
-        // других модулей пойдут через нехукнутый путь, а позже мы их
-        // перехватим уже в неконсистентном состоянии.
+        NSString *exeName = [exe lastPathComponent];
+        if (exeName) {
+            NSArray *banned = @[ @"navd", @"destinationd", @"mapspushd", @"geod",
+                                 @"locationd", @"routined", @"callservicesd",
+                                 @"identityservicesd", @"coreduetd", @"contextstored",
+                                 @"spotlightd", @"searchd", @"suggestd",
+                                 @"assistantd", @"mediaserverd", @"assetsd",
+                                 @"cameracaptured", @"backboardd", @"runningboardd" ];
+            for (NSString *n in banned) if ([exeName isEqualToString:n]) return;
+        }
+
+        if ([bid hasPrefix:@"com.apple."])             return;
+        if ([path hasPrefix:@"/usr/"])                 return;
+        if ([path hasPrefix:@"/System/"])              return;
+        if ([bid isEqualToString:@"org.coolstar.SileoStore"]) return;
+        if ([bid isEqualToString:@"com.tigisoftware.Filza"])  return;
+        if ([bid isEqualToString:@"xyz.willy.Zebra"])         return;
+        if ([bid hasPrefix:@"com.opa334.TrollStore"])  return;
+        if ([bid hasPrefix:@"com.palera1n"])           return;
+
         MSHookFunction((void *)_dyld_image_count,
                        (void *)hook_dyld_image_count,
                        (void **)&orig_dyld_image_count);
@@ -254,7 +275,6 @@ static int hook_dladdr(const void *addr, Dl_info *info) {
                        (void *)hook_dladdr,
                        (void **)&orig_dladdr);
 
-        // FIX 6: инвалидируем кеш только при изменениях dyld
         _dyld_register_func_for_add_image(_stealth_image_added);
         _dyld_register_func_for_remove_image(_stealth_image_removed);
 
