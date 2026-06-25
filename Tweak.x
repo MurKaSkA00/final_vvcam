@@ -1,12 +1,12 @@
 // =============================================================================
-// MediaPlaybackUtils — Tweak.x  (v1.7.9)
-// FIX 6 (v1.7.9):
-//   - setSampleBufferDelegate: больше не делает method_setImplementation на
-//     Method, который может быть унаследован от суперкласса (раньше это
-//     ломало все классы-наследники и приводило к stack overflow при втором
-//     открытии камеры в Instagram/Snapchat/TikTok/Tinder/KYC-сканерах).
-//     Вместо этого используется class_addMethod / class_replaceMethod
-//     ПО КЛАССУ делегата с трекингом через _mpu_globalHookedClasses.
+// MediaPlaybackUtils — Tweak.x (v1.8.3)
+// FIX 9 (v1.8.3):
+//   • _v_shouldRunInThisProcess(): блокирует .appex (виджеты, intents,
+//     share-extensions), navd/destinationd/mapspushd и прочие системные
+//     карто-/локейшен-сервисы без GPU.
+//   • CIContext теперь ЛЕНИВЫЙ — создаётся в _v_ciContextLazy() при первом
+//     реальном использовании в overlay, а НЕ в _v_init/%ctor. В navd и
+//     прочих сервисах без GPU CIContext контstructorContextWithOptions: падает.
 // =============================================================================
 
 #import <Foundation/Foundation.h>
@@ -15,15 +15,15 @@
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <CoreImage/CoreImage.h>
-#import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
+#import <IOSurface/IOSurface.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <substrate.h>
-#import <notify.h>
 #import "SharedState.h"
 #import "_MPUMediaBufferAdapter.h"
 
-#define MPU_BUNDLE_ID  @"com.proximacore.mediaplaybackutils"
+#define MPU_BUNDLE_ID @"com.proximacore.mediaplaybackutils"
 #define MPU_NOTIF_NAME CFSTR("com.proximacore.mpu/cfg")
 #define MPU_LOG(fmt, ...) NSLog(@"[MPU] " fmt, ##__VA_ARGS__)
 
@@ -42,6 +42,25 @@ static void _v_stopStream(void);
 static void _v_restartStreamIfNeeded(void);
 static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef original);
 
+// FIX 9: ленивый CIContext, чтобы не падать в navd/destinationd без GPU
+static CIContext *_v_ciContextLazy(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        @try {
+            _v_ciContext = [CIContext contextWithOptions:@{
+                kCIContextUseSoftwareRenderer: @YES
+            }];
+        } @catch (__unused NSException *e) {
+            _v_ciContext = nil;
+        }
+        if (!_v_ciContext) {
+            @try { _v_ciContext = [CIContext contextWithOptions:nil]; }
+            @catch (__unused NSException *e) { _v_ciContext = nil; }
+        }
+    });
+    return _v_ciContext;
+}
+
 static NSDictionary *_v_readPrefsDict(void) {
     NSArray *paths = @[
         @"/var/mobile/Library/Preferences/com.proximacore.mediaplaybackutils.plist",
@@ -57,7 +76,7 @@ static NSDictionary *_v_readPrefsDict(void) {
                                   (__bridge CFStringRef)MPU_BUNDLE_ID);
     CFPropertyListRef urlRef = CFPreferencesCopyAppValue(CFSTR("rtspURL"),
                                   (__bridge CFStringRef)MPU_BUNDLE_ID);
-    if (enRef)  { m[@"enabled"] = (__bridge id)enRef;  CFRelease(enRef); }
+    if (enRef)  { m[@"enabled"] = (__bridge id)enRef;  CFRelease(enRef);  }
     if (urlRef) { m[@"rtspURL"] = (__bridge id)urlRef; CFRelease(urlRef); }
     return m.count ? m : nil;
 }
@@ -69,7 +88,7 @@ static void _v_loadPrefs(void) {
     id rawObj = d[@"rtspURL"];
     if ([rawObj isKindOfClass:[NSString class]]) raw = (NSString *)rawObj;
     NSString *trimmed = [raw stringByTrimmingCharactersInSet:
-                          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSString *newURL = (trimmed.length > 0) ? [trimmed copy] : @"";
 
     BOOL urlChanged = ![newURL isEqualToString:_url ?: @""];
@@ -78,7 +97,7 @@ static void _v_loadPrefs(void) {
 
     if (_enabled && _url.length > 0) {
         if (urlChanged) _v_restartStreamIfNeeded();
-        else _v_startStreamIfNeeded();
+        else            _v_startStreamIfNeeded();
     } else {
         _v_stopStream();
     }
@@ -98,7 +117,7 @@ static void _v_init(void) {
             _mpu_globalHookedClasses = [NSMutableSet new];
             _mpu_globalHookedLock    = [NSObject new];
         }
-        _v_ciContext = [CIContext contextWithOptions:nil];
+        // FIX 9: НЕ создаём CIContext здесь — это валит navd/destinationd/mapspushd
         _v_streamQueue = dispatch_queue_create("com.mpu.stream", DISPATCH_QUEUE_SERIAL);
 
         CFNotificationCenterAddObserver(
@@ -128,9 +147,9 @@ static void _v_startStreamIfNeeded(void) {
             if (!pb) return;
             @synchronized(_v_lock) {
                 if (_lastBuffer) CVPixelBufferRelease(_lastBuffer);
-                _lastBuffer = (CVPixelBufferRef)CFRetain(pb);
+                _lastBuffer     = (CVPixelBufferRef)CFRetain(pb);
                 _lastBufferTime = CACurrentMediaTime();
-                _isSwitching = NO;
+                _isSwitching    = NO;
             }
         };
         _v_adapter.errorCallback = ^(NSError *err) {
@@ -172,8 +191,8 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
     CMSampleBufferGetSampleTimingInfo(original, 0, &timing);
     if (CMTIME_IS_INVALID(timing.presentationTimeStamp)) {
         timing.presentationTimeStamp = CMTimeMakeWithSeconds(CACurrentMediaTime(), 1000);
-        timing.duration = CMTimeMake(1, 30);
-        timing.decodeTimeStamp = kCMTimeInvalid;
+        timing.duration              = CMTimeMake(1, 30);
+        timing.decodeTimeStamp       = kCMTimeInvalid;
     }
     CMSampleBufferRef out = NULL;
     OSStatus s = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, src, true, NULL, NULL,
@@ -184,27 +203,85 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
     return out;
 }
 
+// FIX 9: жёсткий фильтр — НЕ грузимся в системные сервисы и app-extensions
 static BOOL _v_shouldRunInThisProcess(void) {
     NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
     NSString *path = [[NSBundle mainBundle] bundlePath];
+    NSString *exe  = [[NSBundle mainBundle] executablePath];
     if (!bid) return NO;
-    if ([bid hasPrefix:@"com.apple.springboard"]) return NO;
-    if ([bid hasPrefix:@"com.apple.mediaserverd"]) return NO;
-    if ([bid hasPrefix:@"com.apple.assetsd"])      return NO;
-    if ([bid hasPrefix:@"com.apple.cameracaptured"]) return NO;
-    if ([bid hasPrefix:@"com.apple.WebKit"])       return NO;
+
+    // 1) app-extensions всех видов — виджеты, intents, share, notification…
+    if ([path hasSuffix:@".appex"])           return NO;
+    if ([path containsString:@".appex/"])     return NO;
+    if ([bid hasSuffix:@".widget"])           return NO;
+    if ([bid hasSuffix:@".widgets"])          return NO;
+    if ([bid containsString:@".widget."])     return NO;
+    if ([bid hasSuffix:@".extension"])        return NO;
+    if ([bid containsString:@".extension."])  return NO;
+    if ([bid hasSuffix:@".WidgetExtension"])  return NO;
+    if ([bid hasSuffix:@".intents"])          return NO;
+    if ([bid hasSuffix:@".ShareExtension"])   return NO;
+    if ([bid hasSuffix:@".NotificationServiceExtension"]) return NO;
+    if ([bid hasSuffix:@".NotificationContentExtension"]) return NO;
+
+    // 2) Apple system bundles & demons
+    if ([bid hasPrefix:@"com.apple.springboard"])       return NO;
+    if ([bid hasPrefix:@"com.apple.mediaserverd"])      return NO;
+    if ([bid hasPrefix:@"com.apple.assetsd"])           return NO;
+    if ([bid hasPrefix:@"com.apple.cameracaptured"])    return NO;
+    if ([bid hasPrefix:@"com.apple.WebKit"])            return NO;
+    if ([bid hasPrefix:@"com.apple.Maps"])              return NO;
+    if ([bid hasPrefix:@"com.apple.navd"])              return NO;
+    if ([bid hasPrefix:@"com.apple.GeoServices"])       return NO;
+    if ([bid hasPrefix:@"com.apple.geod"])              return NO;
+    if ([bid hasPrefix:@"com.apple.locationd"])         return NO;
+    if ([bid hasPrefix:@"com.apple.coreduetd"])         return NO;
+    if ([bid hasPrefix:@"com.apple.routined"])          return NO;
+    if ([bid hasPrefix:@"com.apple.callservicesd"])     return NO;
+    if ([bid hasPrefix:@"com.apple.identityservicesd"]) return NO;
+    if ([bid hasPrefix:@"com.apple.coreservices"])      return NO;
+    if ([bid hasPrefix:@"com.apple.dataaccessd"])       return NO;
+    if ([bid hasPrefix:@"com.apple.contextstored"])     return NO;
+    if ([bid hasPrefix:@"com.apple.eventkit"])          return NO;
+    if ([bid hasPrefix:@"com.apple.knowledge"])         return NO;
+    if ([bid hasPrefix:@"com.apple.parsec"])            return NO;
+    if ([bid hasPrefix:@"com.apple.siri"])              return NO;
+    if ([bid hasPrefix:@"com.apple.Siri"])              return NO;
+    if ([bid hasPrefix:@"com.apple.assistantd"])        return NO;
+    if ([bid hasPrefix:@"com.apple.spotlightd"])        return NO;
+    if ([bid hasPrefix:@"com.apple.searchd"])           return NO;
+    if ([bid hasPrefix:@"com.apple.suggestd"])          return NO;
+    if ([bid hasPrefix:@"com.apple.mapspushd"])         return NO;
+    if ([bid hasPrefix:@"com.apple.destinationd"])      return NO;
+
+    // 3) бинарь по имени экзекьютабла (на случай, если bid не содержит идентификатор сервиса)
+    NSString *exeName = [exe lastPathComponent];
+    if (exeName) {
+        NSArray *banned = @[
+            @"navd", @"destinationd", @"mapspushd", @"geod", @"locationd",
+            @"routined", @"callservicesd", @"identityservicesd", @"dataaccessd",
+            @"coreduetd", @"contextstored", @"spotlightd", @"searchd", @"suggestd",
+            @"assistantd", @"mediaserverd", @"assetsd", @"cameracaptured",
+            @"backboardd", @"runningboardd", @"mDNSResponder", @"powerd",
+            @"thermalmonitord", @"timed", @"useractivityd", @"wifid", @"bluetoothd",
+        ];
+        for (NSString *n in banned) {
+            if ([exeName isEqualToString:n]) return NO;
+        }
+    }
+
+    // 4) пути системных бинарников
     if ([path hasPrefix:@"/usr/"])                 return NO;
+    if ([path hasPrefix:@"/System/Library/CoreServices/"]) return NO;
+    if ([path hasPrefix:@"/System/Library/PrivateFrameworks/"]) return NO;
+    if ([path hasPrefix:@"/System/Library/Frameworks/"]) return NO;
+
     return YES;
 }
 
-// ── FIX 8 (v1.8.2): отбраковываем Swift/Kotlin/служебные классы — на них
-//    class_addMethod ломает Swift-layout и валит процессы (Citi, Capital One,
-//    PayPal, банки на Swift/Kotlin-Native). Логика дублирует BrowserHooks/WebRTCHooks.
 static BOOL _v_isUnsafeClassName(const char *cn) {
     if (!cn || cn[0] == 0) return YES;
-    // Swift mangled: _Tt..., _$s..., _$S...
     if (cn[0] == '_' && (cn[1] == 'T' || cn[1] == '$')) return YES;
-    // Swift dotted name "Module.Class" / Kotlin-Native ":" / '$' / non-ASCII
     for (const char *p = cn; *p; p++) {
         unsigned char c = (unsigned char)*p;
         if (c == '.' || c == '$' || c == ':' || c >= 0x80) return YES;
@@ -215,11 +292,8 @@ static BOOL _v_isUnsafeClassName(const char *cn) {
     return NO;
 }
 
-// ── FIX 6 + FIX 8: безопасный хук делегата AVCaptureVideoDataOutput по классу
 static void _v_hookDelegateClass(Class cls) {
     if (!cls) return;
-    // FIX 8: НЕ трогаем Swift/Kotlin/служебные классы — class_addMethod на
-    // них валит swift_getSingletonMetadata в Citi/PayPal/Capital One/банках.
     const char *cnRaw = class_getName(cls);
     if (_v_isUnsafeClassName(cnRaw)) {
         MPU_LOG(@"skip unsafe delegate class: %s", cnRaw ?: "(null)");
@@ -238,23 +312,18 @@ static void _v_hookDelegateClass(Class cls) {
 
     const char *types = method_getTypeEncoding(m);
     if (!types) return;
-    // capturedIMP — это либо собственная IMP класса, либо унаследованная
-    // от суперкласса (legit case). Захватываем ДО class_addMethod.
     __block IMP capturedIMP = method_getImplementation(m);
 
     IMP newIMP = imp_implementationWithBlock(
         ^(id self_, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
             CMSampleBufferRef rep = (_enabled && sb && _url.length > 0)
-                ? _v_makeReplacementSampleBuffer(sb) : NULL;
+                                  ? _v_makeReplacementSampleBuffer(sb) : NULL;
             CMSampleBufferRef use = rep ?: sb;
             ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
                 capturedIMP)(self_, sel, output, use, conn);
             if (rep) CFRelease(rep);
         });
 
-    // 1) если у класса НЕТ собственной реализации (унаследована) — add
-    //    добавляет наш IMP, capturedIMP уже корректно указывает на super.
-    // 2) если есть собственная — replace вернёт её, и мы её сохраним.
     BOOL added = class_addMethod(cls, sel, newIMP, types);
     if (!added) {
         IMP prev = class_replaceMethod(cls, sel, newIMP, types);
@@ -283,7 +352,7 @@ static void _v_hookDelegateClass(Class cls) {
 
 - (void)layoutSublayers {
     %orig;
-    if (!_enabled) return;
+    if (!_enabled)        return;
     if (_url.length == 0) return;
     _v_init();
 
@@ -291,10 +360,10 @@ static void _v_hookDelegateClass(Class cls) {
     if (!overlay) {
         overlay = [CALayer layer];
         overlay.contentsGravity = kCAGravityResizeAspectFill;
-        overlay.zPosition = 999999;
+        overlay.zPosition       = 999999;
         overlay.backgroundColor = [UIColor clearColor].CGColor;
-        overlay.opaque = NO;
-        overlay.hidden = YES;
+        overlay.opaque          = NO;
+        overlay.hidden          = YES;
         [self addSublayer:overlay];
         objc_setAssociatedObject(self, "_v_overlay", overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -322,7 +391,7 @@ static void _v_hookDelegateClass(Class cls) {
     BOOL switching;
     @synchronized(_v_lock) {
         if (_lastBuffer) bufCopy = CVPixelBufferRetain(_lastBuffer);
-        bufTime = _lastBufferTime;
+        bufTime   = _lastBufferTime;
         switching = _isSwitching;
     }
 
@@ -330,8 +399,8 @@ static void _v_hookDelegateClass(Class cls) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         overlay.contents = nil;
-        overlay.hidden = YES;
-        overlay.opacity = 0.0;
+        overlay.hidden   = YES;
+        overlay.opacity  = 0.0;
         [CATransaction commit];
         return;
     }
@@ -349,31 +418,32 @@ static void _v_hookDelegateClass(Class cls) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
         overlay.contents = (__bridge id)surf;
-        overlay.frame = self.bounds;
-        overlay.hidden = NO;
-        overlay.opacity = 1.0;
-        overlay.opaque = YES;
+        overlay.frame    = self.bounds;
+        overlay.hidden   = NO;
+        overlay.opacity  = 1.0;
+        overlay.opaque   = YES;
         [CATransaction commit];
         CVPixelBufferRelease(bufCopy);
         return;
     }
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-        CIImage *ci = [CIImage imageWithCVPixelBuffer:bufCopy];
-        if (ci && _v_ciContext) {
+        CIImage  *ci  = [CIImage imageWithCVPixelBuffer:bufCopy];
+        CIContext *ctx = _v_ciContextLazy();  // FIX 9: ленивая инициализация
+        if (ci && ctx) {
             CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-            CGImageRef cg = [_v_ciContext createCGImage:ci fromRect:ci.extent
-                                                  format:kCIFormatBGRA8 colorSpace:cs];
+            CGImageRef cg = [ctx createCGImage:ci fromRect:ci.extent
+                                         format:kCIFormatBGRA8 colorSpace:cs];
             CGColorSpaceRelease(cs);
             if (cg) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [CATransaction begin];
                     [CATransaction setDisableActions:YES];
                     overlay.contents = (__bridge id)cg;
-                    overlay.frame = self.bounds;
-                    overlay.hidden = NO;
-                    overlay.opacity = 1.0;
-                    overlay.opaque = YES;
+                    overlay.frame    = self.bounds;
+                    overlay.hidden   = NO;
+                    overlay.opacity  = 1.0;
+                    overlay.opaque   = YES;
                     [CATransaction commit];
                     CGImageRelease(cg);
                 });
@@ -389,7 +459,7 @@ static void _v_hookDelegateClass(Class cls) {
 
 - (void)enqueueSampleBuffer:(CMSampleBufferRef)sampleBuffer {
     if (!_enabled || !sampleBuffer) { %orig; return; }
-    if (_url.length == 0) { %orig; return; }
+    if (_url.length == 0)           { %orig; return; }
     _v_init();
     CMSampleBufferRef rep = _v_makeReplacementSampleBuffer(sampleBuffer);
     if (rep) {
