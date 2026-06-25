@@ -1,4 +1,3 @@
-📄 SharedState.h (полная замена)
 // SharedState.h - MediaPlaybackUtils v1.8.4
 #ifndef SHARED_STATE_H
 #define SHARED_STATE_H
