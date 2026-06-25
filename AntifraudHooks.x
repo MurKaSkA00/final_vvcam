@@ -129,20 +129,44 @@
 
 %ctor {
     @autoreleasepool {
-        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
+        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
         NSString *path = [[NSBundle mainBundle] bundlePath];
+        NSString *exe  = [[NSBundle mainBundle] executablePath];
         if (!bid) return;
 
+        // FIX 9: НЕ в app-extensions / системных сервисах
+        if ([path hasSuffix:@".appex"])       return;
+        if ([path containsString:@".appex/"]) return;
+        if ([bid hasSuffix:@".widget"])       return;
+        if ([bid hasSuffix:@".widgets"])      return;
+        if ([bid containsString:@".widget."]) return;
+        if ([bid hasSuffix:@".extension"])    return;
+        if ([bid containsString:@".extension."]) return;
+        if ([bid hasSuffix:@".intents"])      return;
+        if ([bid hasSuffix:@".ShareExtension"])           return;
+        if ([bid hasSuffix:@".NotificationServiceExtension"]) return;
+
+        NSString *exeName = [exe lastPathComponent];
+        if (exeName) {
+            NSArray *banned = @[ @"navd", @"destinationd", @"mapspushd", @"geod",
+                                 @"locationd", @"routined", @"callservicesd",
+                                 @"identityservicesd", @"coreduetd", @"contextstored",
+                                 @"spotlightd", @"searchd", @"suggestd",
+                                 @"assistantd", @"mediaserverd", @"assetsd",
+                                 @"cameracaptured", @"backboardd", @"runningboardd" ];
+            for (NSString *n in banned) if ([exeName isEqualToString:n]) return;
+        }
+
         if ([bid hasPrefix:@"com.apple.springboard"]) return;
-        if ([path hasPrefix:@"/usr/"]) return;
-        if ([path hasPrefix:@"/System/"]) return;
-        if ([bid hasPrefix:@"org.coolstar."]) return;
-        if ([bid hasPrefix:@"com.tigisoftware."]) return;
-        if ([bid hasPrefix:@"org.theos."]) return;
-        if ([bid hasPrefix:@"science.xnu."]) return;
-        if ([bid isEqualToString:@"xyz.willy.Zebra"]) return;
-        if ([bid hasPrefix:@"com.opa334."]) return;
-        if ([bid hasPrefix:@"com.palera1n"]) return;
+        if ([path hasPrefix:@"/usr/"])                 return;
+        if ([path hasPrefix:@"/System/"])              return;
+        if ([bid hasPrefix:@"org.coolstar."])          return;
+        if ([bid hasPrefix:@"com.tigisoftware."])      return;
+        if ([bid hasPrefix:@"org.theos."])             return;
+        if ([bid hasPrefix:@"science.xnu."])           return;
+        if ([bid isEqualToString:@"xyz.willy.Zebra"])  return;
+        if ([bid hasPrefix:@"com.opa334."])            return;
+        if ([bid hasPrefix:@"com.palera1n"])           return;
         if ([bid hasPrefix:@"com.apple.WebKit"])       return;
         if ([bid hasPrefix:@"com.apple.mobilesafari"]) return;
         if ([bid hasPrefix:@"com.google.chrome"])      return;
@@ -154,8 +178,8 @@
         if ([bid hasPrefix:@"com.ddg.ios"])            return;
         if ([bid hasPrefix:@"com.kagi"])               return;
 
-        // FIX 6: убран MSHookFunction(NSStringFromClass) — только %init
         %init;
         NSLog(@"[MPU/AntiIntrospect] Installed for %@", bid);
     }
 }
+
