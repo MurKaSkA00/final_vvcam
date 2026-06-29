@@ -2,25 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>Filter</key>
-    <dict>
-        <key>Executables</key>
-        <array>
-            <string>Camera</string>
-            <string>MobileSlideShow</string>
-            <string>Telegram</string>
-            <string>com.apple.WebKit.WebContent</string>
-        </array>
-        <key>Bundles</key>
-        <array>
-            <string>com.apple.camera</string>
-            <string>com.apple.mobileslideshow</string>
-            <string>ph.telegra.Telegraph</string>
-            <string>org.telegram.Telegram</string>
-            <string>com.apple.mobilesafari</string>
-        </array>
-        <key>Mode</key>
-        <string>Any</string>
-    </dict>
+	<key>Filter</key>
+	<dict>
+		<key>Frameworks</key>
+		<array>
+			<string>AVFoundation</string>
+		</array>
+	</dict>
 </dict>
 </plist>
