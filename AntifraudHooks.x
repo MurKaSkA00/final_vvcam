@@ -1,4 +1,4 @@
-// AntifraudHooks.x - MediaPlaybackUtils v1.7.9
+// AntifraudHooks.x - MediaPlaybackUtils v1.8.0 (logos-safe)
 // FIX 6 (v1.7.9):
 //   - УБРАН MSHookFunction(NSStringFromClass). Эта функция вызывается
 //     миллионы раз на старте, а dispatch_async-установка trampoline'а
@@ -10,6 +10,13 @@
 //     системные ключи вроде "_UIKitMPU*", из-за чего часть фреймворков
 //     SDK не получали свои настройки и тихо exit'или).
 //   - %hook NSProcessInfo - environment вызывает %orig ровно один раз.
+// FIX (v1.8.0):
+//   - УДАЛЁН %hook AVCaptureConnection с однострочными методами
+//     isVideoMirroringSupported / isVideoOrientationSupported — свежий
+//     logos из master-theos не парсит однострочные { return %orig; },
+//     ломая раскрытие. Эти геттеры всё равно ничего не подменяли —
+//     просто проксировали %orig без логики. Удаление безопасно: реальные
+//     значения от системы и так корректны для антифрод-проверок.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -62,11 +69,6 @@
     return %orig;
 }
 
-%end
-
-%hook AVCaptureConnection
-- (BOOL)isVideoMirroringSupported { return %orig; }
-- (BOOL)isVideoOrientationSupported { return %orig; }
 %end
 
 %hook AVCaptureDeviceFormat
@@ -182,4 +184,3 @@
         NSLog(@"[MPU/AntiIntrospect] Installed for %@", bid);
     }
 }
-
