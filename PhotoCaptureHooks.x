@@ -1,18 +1,12 @@
-// PhotoCaptureHooks.x - MediaPlaybackUtils v1.7.8
+// PhotoCaptureHooks.x - MediaPlaybackUtils v1.7.9 (logos-safe)
 // =============================================================================
 // ПОДМЕНА ПРИ ФОТОГРАФИРОВАНИИ (still capture).
 //
-// Проблема: Tweak.x/WebRTCHooks.x/BrowserHooks.x подменяют только ВИДЕО-путь
-// (AVCaptureVideoDataOutput / превью / AVSampleBufferDisplayLayer). Когда
-// пользователь жмёт затвор, приложения берут кадр напрямую с сенсора через
-// AVCapturePhotoOutput → AVCapturePhoto (iOS 11+) или AVCaptureStillImageOutput
-// (legacy). Этот путь не перехватывался → СОХРАНЁННОЕ фото шло с реальной линзы.
-//
-// Решение: перехватываем сами объекты результата съёмки и их аксессоры данных
-// (fileDataRepresentation / CGImageRepresentation / pixelBuffer / preview...),
-// возвращая текущий кадр потока _lastBuffer — тот же, что виден в превью.
-// Метаданные EXIF/GPS/дата берём из реального снимка (для антифрод/KYC),
-// но ориентацию нормализуем в 1 (кадр уже ориентирован как в превью).
+// v1.7.9: метод captureStillImageAsynchronouslyFromConnection:completionHandler:
+//         переведён на MSHookMessageEx, потому что свежий logos из master-theos
+//         ломается на %orig(args) ("Invalid argument structure") и склеивает
+//         соседние методы / %ctor внутрь функции. Остальные хуки оставлены
+//         через %hook — там %orig идёт без аргументов и проблем нет.
 // =============================================================================
 
 #import <Foundation/Foundation.h>
@@ -23,6 +17,7 @@
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <substrate.h>
 #import "SharedState.h"
 
 // AVCaptureStillImageOutput помечен deprecated с iOS 10, а проект собирается с
@@ -218,24 +213,15 @@ static CMSampleBufferRef _mpu_makeSampleBuffer(CMSampleBufferRef original) CF_RE
 
 // =============================================================================
 // AVCaptureStillImageOutput (legacy, iOS < 11 и старые приложения)
+//
+// jpegStillImageNSDataRepresentation: оставляем через %hook — там %orig
+// без аргументов, всё ок.
+//
+// captureStillImageAsynchronouslyFromConnection:completionHandler: НЕ хукаем
+// через logos — там пришлось бы делать %orig(connection, wrapped), а свежий
+// logos на этом падает. Делаем через MSHookMessageEx ниже в %ctor.
 // =============================================================================
 %hook AVCaptureStillImageOutput
-
-- (void)captureStillImageAsynchronouslyFromConnection:(AVCaptureConnection *)connection
-                                    completionHandler:(void (^)(CMSampleBufferRef, NSError *))handler {
-    if (!_mpu_photo_active() || !handler) { %orig; return; }
-
-    void (^wrapped)(CMSampleBufferRef, NSError *) = ^(CMSampleBufferRef sb, NSError *err) {
-        CMSampleBufferRef rep = _mpu_makeSampleBuffer(sb);
-        if (rep) {
-            handler(rep, nil);
-            CFRelease(rep);
-        } else {
-            handler(sb, err);
-        }
-    };
-    %orig(connection, wrapped);
-}
 
 + (NSData *)jpegStillImageNSDataRepresentation:(CMSampleBufferRef)jpegSampleBuffer {
     if (_mpu_photo_active()) {
@@ -250,6 +236,34 @@ static CMSampleBufferRef _mpu_makeSampleBuffer(CMSampleBufferRef original) CF_RE
 }
 
 %end
+
+// =============================================================================
+// captureStillImageAsynchronouslyFromConnection:completionHandler:
+// MSHookMessageEx-вариант (logos-safe).
+// =============================================================================
+typedef void (*mpu_captureStill_imp_t)(id, SEL, AVCaptureConnection *,
+                                       void (^)(CMSampleBufferRef, NSError *));
+static mpu_captureStill_imp_t mpu_orig_captureStill = NULL;
+
+static void mpu_new_captureStill(id self, SEL _cmd,
+                                 AVCaptureConnection *connection,
+                                 void (^handler)(CMSampleBufferRef, NSError *)) {
+    if (!_mpu_photo_active() || !handler) {
+        if (mpu_orig_captureStill) mpu_orig_captureStill(self, _cmd, connection, handler);
+        return;
+    }
+    void (^wrapped)(CMSampleBufferRef, NSError *) = ^(CMSampleBufferRef sb, NSError *err) {
+        CMSampleBufferRef rep = _mpu_makeSampleBuffer(sb);
+        if (rep) {
+            handler(rep, nil);
+            CFRelease(rep);
+        } else {
+            handler(sb, err);
+        }
+    };
+    if (mpu_orig_captureStill)
+        mpu_orig_captureStill(self, _cmd, connection, wrapped);
+}
 
 // =============================================================================
 // ctor
@@ -285,6 +299,19 @@ static CMSampleBufferRef _mpu_makeSampleBuffer(CMSampleBufferRef original) CF_RE
         }
 
         %init;
+
+        // MSHookMessageEx для captureStillImageAsynchronously...
+        Class clsStill = NSClassFromString(@"AVCaptureStillImageOutput");
+        if (clsStill) {
+            SEL sel = @selector(captureStillImageAsynchronouslyFromConnection:completionHandler:);
+            Method m = class_getInstanceMethod(clsStill, sel);
+            if (m) {
+                MSHookMessageEx(clsStill, sel, (IMP)mpu_new_captureStill,
+                                (IMP *)&mpu_orig_captureStill);
+                MPU_PHOTO_LOG(@"MSHookMessageEx: captureStillImageAsync... hooked");
+            }
+        }
+
         MPU_PHOTO_LOG(@"Loaded for %@", bid);
     }
 }
