@@ -14,6 +14,9 @@ MediaPlaybackUtils_LDFLAGS += -undefined dynamic_lookup
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
-internal-stage::
-	$(ECHO_NOTHING)mkdir -p $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences$(ECHO_END)
-	$(ECHO_NOTHING)cp entry.plist $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/MediaPlaybackUtils.plist$(ECHO_END)
+# NOTE: PreferenceLoader entry plist installation is handled by the top-level
+# `layout/Library/PreferenceLoader/Preferences/MediaPlaybackUtils.plist`.
+# We previously copied `prefs/entry.plist` here too, which (a) referenced a
+# non-existent icon and (b) overwrote the clean layout/ version because
+# subproject stages run after the main stage. The result: on palera1n the
+# Settings entry silently disappeared. Do NOT re-add this rule.
