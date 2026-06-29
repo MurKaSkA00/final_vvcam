@@ -26,7 +26,7 @@ jobs:
           echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
 
       - name: Install dependencies
-        run: brew install ldid
+        run: brew install ldid dpkg
 
       - name: Install SDK
         run: |
