@@ -1,8 +1,12 @@
-// KYCBypassHooks.x - MediaPlaybackUtils v1.8.5 (logos-safe)
+// KYCBypassHooks.x - MediaPlaybackUtils v1.8.6 (logos-safe)
 // FIX 9:  self-contained — никаких внешних helper'ов, кроме SharedState.
 // v1.8.5: VNImageRequestHandler init-методы переведены на MSHookMessageEx,
 //         потому что свежий logos из master-theos ломается на %orig(args)
 //         ("Invalid argument structure") и склеивает соседние конструкции.
+// v1.8.6: AVCapturePhotoOutput capturePhotoWithSettings:delegate: тоже
+//         переведён на MSHookMessageEx — тот же баг logos с %orig(args)
+//         в многоаргументном методе с `id<Protocol>`-параметром приводил
+//         к "function definition is not allowed here" (см. typedef ниже).
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -249,12 +253,26 @@ static BOOL _kyc_hookClassMethod(Class cls, SEL sel,
 
 // =============================================================================
 // 3) AVCapturePhotoOutput
+//
+// v1.8.6: capturePhotoWithSettings:delegate: переведён на MSHookMessageEx.
+// Причина — та же, что у VNImageRequestHandler init-методов и у
+// captureStillImageAsynchronously... в PhotoCaptureHooks.x: свежий logos
+// из master-theos ломается на %orig(args) в многоаргументном методе с
+// `id<Protocol>`-параметром и склеивает следующие конструкции внутрь
+// _logos_method$..., из-за чего "function definition is not allowed here".
 // =============================================================================
-%hook AVCapturePhotoOutput
+typedef void (*mpu_capturePhoto_imp_t)(id, SEL,
+                                       AVCapturePhotoSettings *,
+                                       id<AVCapturePhotoCaptureDelegate>);
+static mpu_capturePhoto_imp_t mpu_orig_capturePhoto = NULL;
 
-- (void)capturePhotoWithSettings:(AVCapturePhotoSettings *)settings
-                        delegate:(id<AVCapturePhotoCaptureDelegate>)delegate {
-    if (!_enabled || !delegate) { %orig; return; }
+static void mpu_new_capturePhoto(id self, SEL _cmd,
+                                 AVCapturePhotoSettings *settings,
+                                 id<AVCapturePhotoCaptureDelegate> delegate) {
+    if (!_enabled || !delegate) {
+        if (mpu_orig_capturePhoto) mpu_orig_capturePhoto(self, _cmd, settings, delegate);
+        return;
+    }
     Class cls = object_getClass(delegate);
     SEL sel = @selector(captureOutput:didFinishProcessingPhoto:error:);
 
@@ -271,10 +289,8 @@ static BOOL _kyc_hookClassMethod(Class cls, SEL sel,
     if (!_kyc_hookClassMethod(cls, sel, newIMP, &capturedIMP)) {
         imp_removeBlock(newIMP);
     }
-    %orig;
+    if (mpu_orig_capturePhoto) mpu_orig_capturePhoto(self, _cmd, settings, delegate);
 }
-
-%end
 
 // =============================================================================
 // 4) VNImageRequestHandler — подмена входного буфера
@@ -371,6 +387,18 @@ static id mpu_new_vn_init_pb_o(id self, SEL _cmd,
                 MSHookMessageEx(clsVN, sel2, (IMP)mpu_new_vn_init_pb_o,
                                 (IMP *)&mpu_orig_vn_init_pb_o);
                 MPU_KYC_LOG(@"MSHookMessageEx: VN initWithCVPixelBuffer:orientation:options: hooked");
+            }
+        }
+
+        // MSHookMessageEx для AVCapturePhotoOutput capturePhotoWithSettings:delegate:
+        // (v1.8.6: вынесено из %hook — см. комментарий у typedef выше)
+        Class clsPO = NSClassFromString(@"AVCapturePhotoOutput");
+        if (clsPO) {
+            SEL selCP = @selector(capturePhotoWithSettings:delegate:);
+            if (class_getInstanceMethod(clsPO, selCP)) {
+                MSHookMessageEx(clsPO, selCP, (IMP)mpu_new_capturePhoto,
+                                (IMP *)&mpu_orig_capturePhoto);
+                MPU_KYC_LOG(@"MSHookMessageEx: AVCapturePhotoOutput capturePhotoWithSettings:delegate: hooked");
             }
         }
 
