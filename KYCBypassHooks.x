@@ -1,6 +1,8 @@
-// KYCBypassHooks.x - MediaPlaybackUtils v1.8.4
-// FIX 9: self-contained — никаких внешних helper'ов, кроме SharedState.
-// Лeнивый CIContext, безопасный delegate-hook через class_addMethod/replaceMethod.
+// KYCBypassHooks.x - MediaPlaybackUtils v1.8.5 (logos-safe)
+// FIX 9:  self-contained — никаких внешних helper'ов, кроме SharedState.
+// v1.8.5: VNImageRequestHandler init-методы переведены на MSHookMessageEx,
+//         потому что свежий logos из master-theos ломается на %orig(args)
+//         ("Invalid argument structure") и склеивает соседние конструкции.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -276,31 +278,13 @@ static BOOL _kyc_hookClassMethod(Class cls, SEL sel,
 
 // =============================================================================
 // 4) VNImageRequestHandler — подмена входного буфера
+//
+// initWithCVPixelBuffer:options: и initWithCVPixelBuffer:orientation:options:
+// перенесены на MSHookMessageEx (см. ниже), потому что свежий logos падает
+// на %orig(ours, options). initWithCMSampleBuffer:options: оставлен в %hook —
+// там %orig без аргументов нам не нужен (вызов идёт через [self init...]).
 // =============================================================================
 %hook VNImageRequestHandler
-
-- (instancetype)initWithCVPixelBuffer:(CVPixelBufferRef)pixelBuffer
-                              options:(NSDictionary *)options {
-    if (!_enabled) return %orig;
-    CVPixelBufferRef ours = _kyc_copyBuffer();
-    if (!ours) return %orig;
-    self = %orig(ours, options);
-    CVPixelBufferRelease(ours);
-    MPU_KYC_LOG(@"VNImageRequestHandler(CVPixelBuffer) substituted");
-    return self;
-}
-
-- (instancetype)initWithCVPixelBuffer:(CVPixelBufferRef)pixelBuffer
-                          orientation:(CGImagePropertyOrientation)orientation
-                              options:(NSDictionary *)options {
-    if (!_enabled) return %orig;
-    CVPixelBufferRef ours = _kyc_copyBuffer();
-    if (!ours) return %orig;
-    self = %orig(ours, kCGImagePropertyOrientationUp, options);
-    CVPixelBufferRelease(ours);
-    MPU_KYC_LOG(@"VNImageRequestHandler(CVPixelBuffer, orientation) substituted");
-    return self;
-}
 
 - (instancetype)initWithCMSampleBuffer:(CMSampleBufferRef)sampleBuffer
                                options:(NSDictionary *)options {
@@ -313,6 +297,49 @@ static BOOL _kyc_hookClassMethod(Class cls, SEL sel,
 }
 
 %end
+
+// =============================================================================
+// MSHookMessageEx для VNImageRequestHandler initWithCVPixelBuffer:*
+// =============================================================================
+typedef id (*mpu_vn_init_pb_t)(id, SEL, CVPixelBufferRef, NSDictionary *);
+typedef id (*mpu_vn_init_pb_o_t)(id, SEL, CVPixelBufferRef,
+                                CGImagePropertyOrientation, NSDictionary *);
+
+static mpu_vn_init_pb_t   mpu_orig_vn_init_pb   = NULL;
+static mpu_vn_init_pb_o_t mpu_orig_vn_init_pb_o = NULL;
+
+static id mpu_new_vn_init_pb(id self, SEL _cmd,
+                             CVPixelBufferRef pixelBuffer,
+                             NSDictionary *options) {
+    if (!_enabled || !mpu_orig_vn_init_pb)
+        return mpu_orig_vn_init_pb ? mpu_orig_vn_init_pb(self, _cmd, pixelBuffer, options)
+                                   : nil;
+    CVPixelBufferRef ours = _kyc_copyBuffer();
+    if (!ours)
+        return mpu_orig_vn_init_pb(self, _cmd, pixelBuffer, options);
+    id result = mpu_orig_vn_init_pb(self, _cmd, ours, options);
+    CVPixelBufferRelease(ours);
+    MPU_KYC_LOG(@"VNImageRequestHandler(CVPixelBuffer) substituted");
+    return result;
+}
+
+static id mpu_new_vn_init_pb_o(id self, SEL _cmd,
+                               CVPixelBufferRef pixelBuffer,
+                               CGImagePropertyOrientation orientation,
+                               NSDictionary *options) {
+    if (!_enabled || !mpu_orig_vn_init_pb_o)
+        return mpu_orig_vn_init_pb_o ? mpu_orig_vn_init_pb_o(self, _cmd, pixelBuffer,
+                                                              orientation, options)
+                                     : nil;
+    CVPixelBufferRef ours = _kyc_copyBuffer();
+    if (!ours)
+        return mpu_orig_vn_init_pb_o(self, _cmd, pixelBuffer, orientation, options);
+    id result = mpu_orig_vn_init_pb_o(self, _cmd, ours,
+                                      kCGImagePropertyOrientationUp, options);
+    CVPixelBufferRelease(ours);
+    MPU_KYC_LOG(@"VNImageRequestHandler(CVPixelBuffer, orientation) substituted");
+    return result;
+}
 
 // =============================================================================
 // %ctor — gatekeeper, без CIContext init
@@ -328,6 +355,25 @@ static BOOL _kyc_hookClassMethod(Class cls, SEL sel,
         }
 
         %init;
+
+        // MSHookMessageEx для VNImageRequestHandler init-методов с буфером.
+        Class clsVN = NSClassFromString(@"VNImageRequestHandler");
+        if (clsVN) {
+            SEL sel1 = @selector(initWithCVPixelBuffer:options:);
+            if (class_getInstanceMethod(clsVN, sel1)) {
+                MSHookMessageEx(clsVN, sel1, (IMP)mpu_new_vn_init_pb,
+                                (IMP *)&mpu_orig_vn_init_pb);
+                MPU_KYC_LOG(@"MSHookMessageEx: VN initWithCVPixelBuffer:options: hooked");
+            }
+
+            SEL sel2 = @selector(initWithCVPixelBuffer:orientation:options:);
+            if (class_getInstanceMethod(clsVN, sel2)) {
+                MSHookMessageEx(clsVN, sel2, (IMP)mpu_new_vn_init_pb_o,
+                                (IMP *)&mpu_orig_vn_init_pb_o);
+                MPU_KYC_LOG(@"MSHookMessageEx: VN initWithCVPixelBuffer:orientation:options: hooked");
+            }
+        }
+
         MPU_KYC_LOG(@"Loaded for %@", [[NSBundle mainBundle] bundleIdentifier]);
     }
 }
