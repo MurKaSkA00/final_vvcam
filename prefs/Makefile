@@ -11,12 +11,12 @@ MediaPlaybackUtils_FRAMEWORKS = UIKit Foundation
 MediaPlaybackUtils_INSTALL_PATH = /Library/PreferenceBundles
 MediaPlaybackUtils_CFLAGS = -fobjc-arc
 MediaPlaybackUtils_LDFLAGS += -undefined dynamic_lookup
+MediaPlaybackUtils_BUNDLE_INFO_PLIST = Info.plist
 
 include $(THEOS_MAKE_PATH)/bundle.mk
 
-# NOTE: PreferenceLoader entry plist installation is handled by the top-level
-# `layout/Library/PreferenceLoader/Preferences/MediaPlaybackUtils.plist`.
-# We previously copied `prefs/entry.plist` here too, which (a) referenced a
-# non-existent icon and (b) overwrote the clean layout/ version because
-# subproject stages run after the main stage. The result: on palera1n the
-# Settings entry silently disappeared. Do NOT re-add this rule.
+internal-stage::
+	$(ECHO_NOTHING)mkdir -p $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences$(ECHO_END)
+	$(ECHO_NOTHING)cp entry.plist $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/MediaPlaybackUtils.plist$(ECHO_END)
+	$(ECHO_NOTHING)mkdir -p $(THEOS_STAGING_DIR)/Library/PreferenceBundles/MediaPlaybackUtils.bundle$(ECHO_END)
+	$(ECHO_NOTHING)cp Info.plist $(THEOS_STAGING_DIR)/Library/PreferenceBundles/MediaPlaybackUtils.bundle/Info.plist$(ECHO_END)
