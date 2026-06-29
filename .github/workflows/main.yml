@@ -44,22 +44,40 @@ jobs:
 
       - name: Inspect .deb contents
         run: |
-          echo "===== package list ====="
-          ls -la packages/
-          DEB=$(ls packages/*.deb | head -1)
-          echo "===== control metadata ====="
-          dpkg-deb -I "$DEB" || true
-          echo "===== file tree inside .deb (must be under /var/jb on rootless) ====="
-          dpkg-deb -c "$DEB"
+          set -e
+          DEB=$(ls packages/*.deb | head -n1)
+          echo "Found: $DEB"
+
+          mkdir -p _inspect && cd _inspect
+          ar x "../$DEB"
+          mkdir -p data
+          if   [ -f data.tar.xz   ]; then tar -xJf data.tar.xz   -C data;
+          elif [ -f data.tar.gz   ]; then tar -xzf data.tar.gz   -C data;
+          elif [ -f data.tar.zst  ]; then zstd -d  data.tar.zst -o data.tar && tar -xf data.tar -C data;
+          elif [ -f data.tar.lzma ]; then tar --lzma -xf data.tar.lzma -C data;
+          else                            tar -xf data.tar       -C data;
+          fi
+
+          echo "===== file tree inside .deb ====="
+          (cd data && find . -type f | sort)
+
+          echo ""
           echo "===== sanity checks ====="
-          dpkg-deb -c "$DEB" | grep -q "/var/jb/Library/PreferenceLoader/Preferences/MediaPlaybackUtils.plist" \
-            && echo "OK: PreferenceLoader entry present" || echo "FAIL: PreferenceLoader entry MISSING"
-          dpkg-deb -c "$DEB" | grep -q "/var/jb/Library/PreferenceBundles/MediaPlaybackUtils.bundle" \
-            && echo "OK: Preference bundle present" || echo "FAIL: Preference bundle MISSING"
-          dpkg-deb -c "$DEB" | grep -q "/var/jb/Library/PreferenceLoader/Preferences/icon" \
-            && echo "OK: icon next to entry present" || echo "FAIL: icon next to entry MISSING"
-          dpkg-deb -c "$DEB" | grep -q "DynamicLibraries/MediaPlaybackUtils.dylib" \
-            && echo "OK: tweak dylib present" || echo "FAIL: tweak dylib MISSING"
+          DYLIB=data/var/jb/Library/MobileSubstrate/DynamicLibraries/MediaPlaybackUtils.dylib
+          PLIST=data/var/jb/Library/MobileSubstrate/DynamicLibraries/MediaPlaybackUtils.plist
+          BUNDLE=data/var/jb/Library/PreferenceBundles/MediaPlaybackUtils.bundle/MediaPlaybackUtils
+          PREFENTRY=data/var/jb/Library/PreferenceLoader/Preferences/MediaPlaybackUtils.plist
+
+          [ -f "$DYLIB" ]     && echo "OK   dylib:        $DYLIB"     || echo "FAIL dylib missing:       $DYLIB"
+          [ -f "$PLIST" ]     && echo "OK   filter plist: $PLIST"     || echo "FAIL filter plist:        $PLIST"
+          [ -f "$BUNDLE" ]    && echo "OK   pref bundle:  $BUNDLE"    || echo "FAIL pref bundle binary:  $BUNDLE"
+          [ -f "$PREFENTRY" ] && echo "OK   pref entry:   $PREFENTRY" || echo "FAIL pref entry plist:    $PREFENTRY"
+
+          echo ""
+          echo "===== dylib hook symbols ====="
+          if [ -f "$DYLIB" ]; then
+            nm -gU "$DYLIB" 2>/dev/null | grep -Ei 'kyc|antifraud|webrtc|stealth|jailbreak|browser|photocapture' || echo "(no matching symbols found — significant hooks may be missing!)"
+          fi
 
       - name: Upload .deb
         uses: actions/upload-artifact@v4
