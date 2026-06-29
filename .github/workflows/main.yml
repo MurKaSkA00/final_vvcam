@@ -42,6 +42,25 @@ jobs:
           make clean
           make package FINALPACKAGE=1
 
+      - name: Inspect .deb contents
+        run: |
+          echo "===== package list ====="
+          ls -la packages/
+          DEB=$(ls packages/*.deb | head -1)
+          echo "===== control metadata ====="
+          dpkg-deb -I "$DEB" || true
+          echo "===== file tree inside .deb (must be under /var/jb on rootless) ====="
+          dpkg-deb -c "$DEB"
+          echo "===== sanity checks ====="
+          dpkg-deb -c "$DEB" | grep -q "/var/jb/Library/PreferenceLoader/Preferences/MediaPlaybackUtils.plist" \
+            && echo "OK: PreferenceLoader entry present" || echo "FAIL: PreferenceLoader entry MISSING"
+          dpkg-deb -c "$DEB" | grep -q "/var/jb/Library/PreferenceBundles/MediaPlaybackUtils.bundle" \
+            && echo "OK: Preference bundle present" || echo "FAIL: Preference bundle MISSING"
+          dpkg-deb -c "$DEB" | grep -q "/var/jb/Library/PreferenceLoader/Preferences/icon" \
+            && echo "OK: icon next to entry present" || echo "FAIL: icon next to entry MISSING"
+          dpkg-deb -c "$DEB" | grep -q "DynamicLibraries/MediaPlaybackUtils.dylib" \
+            && echo "OK: tweak dylib present" || echo "FAIL: tweak dylib MISSING"
+
       - name: Upload .deb
         uses: actions/upload-artifact@v4
         with:
