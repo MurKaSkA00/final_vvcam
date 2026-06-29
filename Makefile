@@ -8,21 +8,20 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = MediaPlaybackUtils
 
 MediaPlaybackUtils_FILES = \
-	Tweak.x \
-	PhotoCaptureHooks.x \
-	KYCBypassHooks.x \
-	JailbreakBypass.x \
-	StealthHooks.x \
-	WebRTCHooks.x \
-	BrowserHooks.x \
-	AntifraudHooks.x \
-	NetworkBypassHooks.x \
-	FrameProcessor.m \
-	MediaBufferAdapter.m \
-	SharedState.m
+    Tweak.x \
+    PhotoCaptureHooks.x \
+    AntifraudHooks.x \
+    BrowserHooks.x \
+    JailbreakBypass.x \
+    KYCBypassHooks.x \
+    StealthHooks.x \
+    WebRTCHooks.x \
+    FrameProcessor.m \
+    MediaBufferAdapter.m \
+    SharedState.m
 
-MediaPlaybackUtils_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable -Wno-unused-function
-MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore ImageIO MobileCoreServices Vision VisionKit
+MediaPlaybackUtils_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable
+MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore ImageIO MobileCoreServices
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
