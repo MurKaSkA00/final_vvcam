@@ -305,21 +305,6 @@ static void _v_hookDelegateClass(Class cls) {
 }
 %end
 
-%hook AVSampleBufferDisplayLayer
-- (void)enqueueSampleBuffer:(CMSampleBufferRef)sampleBuffer {
-    if (!_enabled || !sampleBuffer || _url.length == 0) { %orig; return; }
-    _v_init();
-    CMSampleBufferRef rep = _v_makeReplacementSampleBuffer(sampleBuffer);
-    if (rep) {
-        sampleBuffer = rep;   // logos подставит это значение в %orig
-        %orig;
-        CFRelease(rep);
-        return;
-    }
-    %orig;
-}
-%end
-
 
 %ctor {
     @autoreleasepool {
