@@ -16,6 +16,7 @@ MediaPlaybackUtils_FILES = \
 	WebRTCHooks.x \
 	BrowserHooks.x \
 	AntifraudHooks.x \
+	NetworkBypassHooks.x \
 	FrameProcessor.m \
 	MediaBufferAdapter.m \
 	SharedState.m
