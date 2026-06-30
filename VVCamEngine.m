@@ -5,8 +5,7 @@
 static CIContext *VVCamCtx(void) {
     static CIContext *ctx; static dispatch_once_t once;
     dispatch_once(&once, ^{
-        id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
-        ctx = dev ? [CIContext contextWithMTLDevice:dev] : [CIContext contextWithOptions:nil];
+        ctx = [CIContext contextWithOptions:@{ kCIContextUseSoftwareRenderer : @NO }];
     });
     return ctx;
 }
