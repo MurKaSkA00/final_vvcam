@@ -1,32 +1,17 @@
-TARGET := iphone:clang:latest:14.0
-ARCHS := arm64
-THEOS_PACKAGE_SCHEME = rootless
-INSTALL_TARGET_PROCESSES = SpringBoard
+export THEOS_PACKAGE_SCHEME = rootless
+
+ARCHS = arm64
+TARGET = iphone:clang:latest:15.0
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = MediaPlaybackUtils
+TWEAK_NAME = vvcam
 
-MediaPlaybackUtils_FILES = \
-    Tweak.x \
-    PhotoCaptureHooks.x \
-    AntifraudHooks.x \
-    BrowserHooks.x \
-    JailbreakBypass.x \
-    KYCBypassHooks.x \
-    StealthHooks.x \
-    WebRTCHooks.x \
-    FrameProcessor.m \
-    MediaBufferAdapter.m \
-    SharedState.m
-
-MediaPlaybackUtils_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable
-MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore ImageIO MobileCoreServices Accelerate
+vvcam_FILES = Tweak.x VVCamState.m VVCamEngine.m
+vvcam_CFLAGS = -fobjc-arc
+vvcam_FRAMEWORKS = AVFoundation CoreMedia CoreVideo CoreImage UIKit QuartzCore ImageIO MobileCoreServices
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-SUBPROJECTS += prefs
-include $(THEOS_MAKE_PATH)/aggregate.mk
-
 after-install::
-	install.exec "killall -9 Preferences Camera || true"
+	install.exec "killall -9 SpringBoard" || true
