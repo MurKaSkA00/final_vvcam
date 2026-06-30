@@ -1,25 +1,4 @@
-// Tweak.x - MediaPlaybackUtils v2.0.4 "Restored Substitution"
-// =============================================================================
-// Гибрид рабочей v1.6.1 (подмена реально работает в Camera/Telegram/всех app)
-// и защитной v1.9.0 (overlay только при наличии кадра, безопасные имена
-// классов, без MSHookFunction NSStringFromClass).
-//
-// Что вернули по сравнению с v1.9.0:
-//   1) %hook AVCaptureSession startRunning - переустанавливает делегата
-//      на video-output ПОСЛЕ старта сессии (без этого приложение, которое
-//      успело выставить делегата ДО загрузки твика, не получает подмены).
-//   2) %hook AVCaptureDevice defaultDeviceWithMediaType - стартует стрим
-//      ровно тогда, когда приложение реально просит камеру.
-//   3) AVCapturePhoto-хуки оставлены в PhotoCaptureHooks.x (там у нас уже
-//      современная реализация).
-//
-// Что оставили от v1.9.0:
-//   - overlay создаётся ТОЛЬКО когда _lastBuffer != NULL (фикс чёрного экрана)
-//   - безопасный фильтр имён классов (Swift/Kotlin mangled - пропускаем)
-//   - НЕТ MSHookFunction на dyld/objc - это валило приложения на iOS 16.7
-//   - используем общий SharedState вместо локальных глобалов
-// =============================================================================
-
+// Tweak.x - MediaPlaybackUtils v2.1.0 "All Apps"
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
@@ -49,20 +28,6 @@ static void _v_loadPrefs(void);
 static void _v_startStreamIfNeeded(void);
 static void _v_stopStream(void);
 static void _v_restartStreamIfNeeded(void);
-
-static CIContext *_v_ciContextLazy(void) {
-    static CIContext *ctx = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        @try { ctx = [CIContext contextWithOptions:nil]; }
-        @catch (__unused NSException *e) { ctx = nil; }
-        if (!ctx) {
-            @try { ctx = [CIContext contextWithOptions:@{kCIContextUseSoftwareRenderer:@YES}]; }
-            @catch (__unused NSException *e) { ctx = nil; }
-        }
-    });
-    return ctx;
-}
 
 static NSDictionary *_v_readPrefsDict(void) {
     NSArray *paths = @[
@@ -107,6 +72,10 @@ static void _v_init(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         if (!_v_lock) _v_lock = [NSObject new];
+        if (!_mpu_globalHookedClasses) {
+            _mpu_globalHookedClasses = [NSMutableSet new];
+            _mpu_globalHookedLock    = [NSObject new];
+        }
         _v_streamQueue = dispatch_queue_create("com.mpu.stream", DISPATCH_QUEUE_SERIAL);
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
             NULL, _v_prefsChangedCallback, MPU_NOTIF_NAME, NULL,
@@ -155,12 +124,23 @@ static void _v_stopStream(void) {
 }
 static void _v_restartStreamIfNeeded(void) { _v_stopStream(); _v_startStreamIfNeeded(); }
 
-static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef original) {
-    CVPixelBufferRef src = NULL;
-    @synchronized(_v_lock) { if (_lastBuffer) src = CVPixelBufferRetain(_lastBuffer); }
+static CMSampleBufferRef _v_makeReplacementForOutput(CMSampleBufferRef original,
+                                                     OSType targetFmt) {
+    CVPixelBufferRef raw = NULL;
+    @synchronized(_v_lock) { if (_lastBuffer) raw = CVPixelBufferRetain(_lastBuffer); }
+    if (!raw) return NULL;
+
+    OSType fmt = targetFmt;
+    if (fmt == 0 && original) {
+        CVImageBufferRef ib = CMSampleBufferGetImageBuffer(original);
+        if (ib) fmt = CVPixelBufferGetPixelFormatType(ib);
+    }
+    CVPixelBufferRef src = _mpu_convertPixelBuffer(raw, fmt);
+    CVPixelBufferRelease(raw);
     if (!src) return NULL;
-    CMVideoFormatDescriptionRef fmt = NULL;
-    if (CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, src, &fmt) != noErr || !fmt) {
+
+    CMVideoFormatDescriptionRef fmtDesc = NULL;
+    if (CMVideoFormatDescriptionCreateForImageBuffer(kCFAllocatorDefault, src, &fmtDesc) != noErr || !fmtDesc) {
         CVPixelBufferRelease(src); return NULL;
     }
     CMSampleTimingInfo timing;
@@ -170,13 +150,13 @@ static CMSampleBufferRef _v_makeReplacementSampleBuffer(CMSampleBufferRef origin
         timing.decodeTimeStamp       = kCMTimeInvalid;
     }
     CMSampleBufferRef out = NULL;
-    OSStatus s = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, src, fmt, &timing, &out);
+    OSStatus s = CMSampleBufferCreateReadyWithImageBuffer(kCFAllocatorDefault, src, fmtDesc, &timing, &out);
     if (s == noErr && out && original) {
         CFDictionaryRef att = CMCopyDictionaryOfAttachments(kCFAllocatorDefault, original,
                                                             kCMAttachmentMode_ShouldPropagate);
         if (att) { CMSetAttachments(out, att, kCMAttachmentMode_ShouldPropagate); CFRelease(att); }
     }
-    CFRelease(fmt); CVPixelBufferRelease(src);
+    CFRelease(fmtDesc); CVPixelBufferRelease(src);
     return (s == noErr) ? out : NULL;
 }
 
@@ -186,7 +166,6 @@ static void _v_hookDelegateClass(Class cls) {
     if (_mpu_isUnsafeClassName(cnRaw)) return;
     NSString *cn = NSStringFromClass(cls);
     if (!cn) return;
-    if ([cn hasPrefix:@"RCT"]) return;
     if (!_mpu_globalHookedClasses) {
         _mpu_globalHookedClasses = [NSMutableSet new];
         _mpu_globalHookedLock    = [NSObject new];
@@ -197,13 +176,22 @@ static void _v_hookDelegateClass(Class cls) {
     SEL sel = @selector(captureOutput:didOutputSampleBuffer:fromConnection:);
     Method m = class_getInstanceMethod(cls, sel);
     if (!m) return;
-    const char *types = method_getTypeEncoding(m);
-    if (!types) return;
+
+    // Если метод унаследован — копируем в наш класс перед свизлом
+    Method mSuper = class_getInstanceMethod(class_getSuperclass(cls), sel);
+    if (m == mSuper) {
+        const char *types = method_getTypeEncoding(m);
+        if (!types) return;
+        if (!class_addMethod(cls, sel, method_getImplementation(m), types)) return;
+        m = class_getInstanceMethod(cls, sel);
+        if (!m) return;
+    }
     __block IMP capturedIMP = method_getImplementation(m);
     IMP newIMP = imp_implementationWithBlock(
         ^(id self_, AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
             @try {
-                CMSampleBufferRef rep = (_enabled && sb) ? _v_makeReplacementSampleBuffer(sb) : NULL;
+                OSType want = _mpu_outputPixelFormat(output);
+                CMSampleBufferRef rep = (_enabled && sb) ? _v_makeReplacementForOutput(sb, want) : NULL;
                 CMSampleBufferRef use = rep ?: sb;
                 if (use && capturedIMP) {
                     ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
@@ -219,13 +207,22 @@ static void _v_hookDelegateClass(Class cls) {
                 } @catch (...) {}
             }
         });
-    BOOL added = class_addMethod(cls, sel, newIMP, types);
-    if (!added) {
-        IMP prev = class_replaceMethod(cls, sel, newIMP, types);
-        if (prev) capturedIMP = prev;
-    }
+    method_setImplementation(m, newIMP);
     @synchronized(_mpu_globalHookedLock) { [_mpu_globalHookedClasses addObject:cn]; }
     MPU_LOG(@"hooked delegate: %@", cn);
+}
+
+static void _v_reattachAllOutputs(AVCaptureSession *session) {
+    @try {
+        for (AVCaptureOutput *output in [session outputs]) {
+            if (![output isKindOfClass:[AVCaptureVideoDataOutput class]]) continue;
+            AVCaptureVideoDataOutput *vdo = (AVCaptureVideoDataOutput *)output;
+            id del = vdo.sampleBufferDelegate;
+            dispatch_queue_t q = vdo.sampleBufferCallbackQueue;
+            if (del) _v_hookDelegateClass(object_getClass(del));
+            if (del && q) [vdo setSampleBufferDelegate:del queue:q];
+        }
+    } @catch (__unused NSException *e) {}
 }
 
 %hook AVCaptureVideoDataOutput
@@ -237,23 +234,17 @@ static void _v_hookDelegateClass(Class cls) {
 
 %hook AVCaptureSession
 - (void)startRunning {
-    if (_enabled) {
-        _v_init();
-        @try {
-            NSArray *outputs = [self outputs];
-            for (AVCaptureOutput *output in outputs) {
-                if ([output isKindOfClass:[AVCaptureVideoDataOutput class]]) {
-                    AVCaptureVideoDataOutput *vdo = (AVCaptureVideoDataOutput *)output;
-                    id del = vdo.sampleBufferDelegate;
-                    dispatch_queue_t q = vdo.sampleBufferCallbackQueue;
-                    if (del && q) {
-                        [vdo setSampleBufferDelegate:del queue:q];
-                    }
-                }
-            }
-        } @catch (__unused NSException *e) {}
-    }
+    if (_enabled) { _v_init(); _v_reattachAllOutputs(self); }
     %orig;
+}
+- (void)addOutput:(AVCaptureOutput *)output {
+    %orig;
+    if (_enabled && [output isKindOfClass:[AVCaptureVideoDataOutput class]]) {
+        _v_init();
+        AVCaptureVideoDataOutput *vdo = (AVCaptureVideoDataOutput *)output;
+        id del = vdo.sampleBufferDelegate;
+        if (del) _v_hookDelegateClass(object_getClass(del));
+    }
 }
 %end
 
@@ -276,7 +267,6 @@ static void _v_hookDelegateClass(Class cls) {
     %orig;
     if (!_enabled || _url.length == 0) return;
     _v_init();
-
     CADisplayLink *dl = objc_getAssociatedObject(self, "_v_dl");
     if (!dl) {
         dl = [CADisplayLink displayLinkWithTarget:self selector:@selector(_mpu_tickOverlay:)];
@@ -305,12 +295,9 @@ static void _v_hookDelegateClass(Class cls) {
 %new
 - (void)_mpu_tickOverlay:(CADisplayLink *)sender {
     if (!_enabled) return;
-
     CVPixelBufferRef bufCopy = NULL;
     @synchronized(_v_lock) { if (_lastBuffer) bufCopy = CVPixelBufferRetain(_lastBuffer); }
-
     CALayer *overlay = objc_getAssociatedObject(self, "_v_overlay");
-
     if (!bufCopy) {
         if (overlay) {
             [CATransaction begin];
@@ -321,7 +308,6 @@ static void _v_hookDelegateClass(Class cls) {
         }
         return;
     }
-
     if (!overlay) {
         overlay = [CALayer layer];
         overlay.contentsGravity = kCAGravityResizeAspectFill;
@@ -332,7 +318,6 @@ static void _v_hookDelegateClass(Class cls) {
         [self addSublayer:overlay];
         objc_setAssociatedObject(self, "_v_overlay", overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-
     IOSurfaceRef surf = CVPixelBufferGetIOSurface(bufCopy);
     if (surf) {
         [CATransaction begin];
@@ -345,10 +330,9 @@ static void _v_hookDelegateClass(Class cls) {
         CVPixelBufferRelease(bufCopy);
         return;
     }
-
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         CIImage *ci  = [CIImage imageWithCVPixelBuffer:bufCopy];
-        CIContext *ctx = _v_ciContextLazy();
+        CIContext *ctx = _mpu_ciContextShared();
         if (ci && ctx) {
             CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
             CGImageRef cg = [ctx createCGImage:ci fromRect:ci.extent
@@ -374,16 +358,7 @@ static void _v_hookDelegateClass(Class cls) {
 
 %ctor {
     @autoreleasepool {
-        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
-        NSString *path = [[NSBundle mainBundle] bundlePath]       ?: @"";
-
-        if ([path containsString:@".appex/"] || [path hasSuffix:@".appex"]) return;
-        if ([bid hasPrefix:@"com.apple.springboard"])  return;
-        if ([bid hasPrefix:@"com.apple.mediaserverd"]) return;
-        if ([bid hasPrefix:@"com.apple.assetsd"])      return;
-        if ([bid hasPrefix:@"com.apple.Preferences"])  return;
-        if ([path hasPrefix:@"/usr/"])                 return;
-
+        if (!_mpu_processIsLoadable()) return;
         _v_init();
         %init;
     }
