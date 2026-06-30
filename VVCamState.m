@@ -3,10 +3,10 @@
 #import <UIKit/UIKit.h>
 #import <notify.h>
 
-static NSString * const kPrefsPath = @"/var/jb/var/mobile/Library/Preferences/com.vvcam.plist";
+static NSString * const kPrefsPath = @"/var/mobile/Library/Preferences/com.vvcam.plist";
 static NSString * const kNotify    = @"com.vvcam/settingschanged";
-static NSString * const kDefVideo  = @"/var/jb/var/mobile/Documents/vvcam.mp4";
-static NSString * const kDefImage  = @"/var/jb/var/mobile/Documents/vvcam.jpg";
+static NSString * const kDefVideo  = @"/var/mobile/Documents/vvcam.mp4";
+static NSString * const kDefImage  = @"/var/mobile/Documents/vvcam.jpg";
 
 @interface VVCamState ()
 @property (nonatomic, copy)   NSString *mediaPath;
