@@ -1,7 +1,10 @@
 #import <AVFoundation/AVFoundation.h>
+#import <ImageIO/ImageIO.h>
+#import <MobileCoreServices/MobileCoreServices.h>
 #import <objc/runtime.h>
 #import "VVCamState.h"
 #import "VVCamEngine.h"
+
 
 // ---- guard: не трогаем системные демоны (mediaserverd/cameracaptured и т.п.) ----
 static BOOL VVCamProcessAllowed(void) {
