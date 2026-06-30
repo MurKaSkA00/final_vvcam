@@ -1,4 +1,4 @@
-// AntifraudHooks.x - MediaPlaybackUtils v1.8.0 (logos-safe)
+// AntifraudHooks.x - MediaPlaybackUtils v2.0.3 (logos-safe)
 // FIX 6 (v1.7.9):
 //   - УБРАН MSHookFunction(NSStringFromClass). Эта функция вызывается
 //     миллионы раз на старте, а dispatch_async-установка trampoline'а
@@ -17,6 +17,12 @@
 //     ломая раскрытие. Эти геттеры всё равно ничего не подменяли —
 //     просто проксировали %orig без логики. Удаление безопасно: реальные
 //     значения от системы и так корректны для антифрод-проверок.
+// FIX (v2.0.3):
+//   - %ctor переведён на единый gatekeeper _mpu_processIsLoadable() из
+//     SharedState.m. Прежний inline-чек блокировал только
+//     com.apple.springboard, поэтому dylib грузился в com.apple.Preferences
+//     и его же NSFileManager-хук скрывал MediaPlaybackUtils.plist от
+//     PreferenceLoader — в результате твик не появлялся в Настройках.
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -131,44 +137,18 @@
 
 %ctor {
     @autoreleasepool {
-        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
-        NSString *path = [[NSBundle mainBundle] bundlePath];
-        NSString *exe  = [[NSBundle mainBundle] executablePath];
-        if (!bid) return;
+        // v2.0.3: используем единый gatekeeper из SharedState.m, чтобы
+        // надёжно НЕ грузиться в com.apple.Preferences / com.apple.* /
+        // системные демоны. Прежний inline-чек блокировал только
+        // springboard, из-за чего NSFileManager-хук скрывал prefs-бандл
+        // от самой Settings.app, и твик не появлялся в Настройках.
+        if (!_mpu_processIsLoadable()) return;
 
-        // FIX 9: НЕ в app-extensions / системных сервисах
-        if ([path hasSuffix:@".appex"])       return;
-        if ([path containsString:@".appex/"]) return;
-        if ([bid hasSuffix:@".widget"])       return;
-        if ([bid hasSuffix:@".widgets"])      return;
-        if ([bid containsString:@".widget."]) return;
-        if ([bid hasSuffix:@".extension"])    return;
-        if ([bid containsString:@".extension."]) return;
-        if ([bid hasSuffix:@".intents"])      return;
-        if ([bid hasSuffix:@".ShareExtension"])           return;
-        if ([bid hasSuffix:@".NotificationServiceExtension"]) return;
+        NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
 
-        NSString *exeName = [exe lastPathComponent];
-        if (exeName) {
-            NSArray *banned = @[ @"navd", @"destinationd", @"mapspushd", @"geod",
-                                 @"locationd", @"routined", @"callservicesd",
-                                 @"identityservicesd", @"coreduetd", @"contextstored",
-                                 @"spotlightd", @"searchd", @"suggestd",
-                                 @"assistantd", @"mediaserverd", @"assetsd",
-                                 @"cameracaptured", @"backboardd", @"runningboardd" ];
-            for (NSString *n in banned) if ([exeName isEqualToString:n]) return;
-        }
-
-        if ([bid hasPrefix:@"com.apple.springboard"]) return;
-        if ([path hasPrefix:@"/usr/"])                 return;
-        if ([path hasPrefix:@"/System/"])              return;
-        if ([bid hasPrefix:@"org.coolstar."])          return;
-        if ([bid hasPrefix:@"com.tigisoftware."])      return;
-        if ([bid hasPrefix:@"org.theos."])             return;
-        if ([bid hasPrefix:@"science.xnu."])           return;
-        if ([bid isEqualToString:@"xyz.willy.Zebra"])  return;
-        if ([bid hasPrefix:@"com.opa334."])            return;
-        if ([bid hasPrefix:@"com.palera1n"])           return;
+        // Дополнительно: браузеры (WebKit/Safari/Chrome/Brave/Edge/Firefox/etc.)
+        // не нуждаются в антифрод-косметике AVCaptureDevice и иногда падают на
+        // NSProcessInfo-хуке из-за своей собственной песочницы окружения.
         if ([bid hasPrefix:@"com.apple.WebKit"])       return;
         if ([bid hasPrefix:@"com.apple.mobilesafari"]) return;
         if ([bid hasPrefix:@"com.google.chrome"])      return;
