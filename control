@@ -1,10 +1,9 @@
-Package: com.proximacore.mediaplaybackutils
-Name: Media Playback Utilities
-Version: 2.1.0
+Package: com.vvcam.tweak
+Name: vvcam
+Version: 2.0.0
 Architecture: iphoneos-arm64
-Depends: mobilesubstrate, preferenceloader
-Maintainer: ProximaCore
-Author: ProximaCore
-Section: System
-Description: Low-level media playback helper for AVFoundation pipelines
-
+Description: Universal virtual camera (Phase 1: per-process AVFoundation video+photo)
+Maintainer: you
+Author: you
+Section: Tweaks
+Depends: ellekit
