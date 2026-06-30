@@ -3,10 +3,32 @@
 #import <UIKit/UIKit.h>
 #import <notify.h>
 
-static NSString * const kPrefsPath = @"/var/mobile/Library/Preferences/com.vvcam.plist";
-static NSString * const kNotify    = @"com.vvcam/settingschanged";
-static NSString * const kDefVideo  = @"/var/mobile/Documents/vvcam.mp4";
-static NSString * const kDefImage  = @"/var/mobile/Documents/vvcam.jpg";
+// =============================================================================
+//  Preferences sources
+//  Исторически в проекте было два несвязанных места, куда писались настройки:
+//    1) com.vvcam.plist                       — старая схема runtime
+//    2) com.proximacore.mediaplaybackutils    — то, что пишет prefs UI
+//                                                (MPURootListController.m)
+//  Чтобы не править UI прямо сейчас, runtime читает оба плиста и берёт
+//  то, что найдёт (приоритет — у "новой" схемы).
+// =============================================================================
+static NSString * const kPrefsPathLegacy = @"/var/mobile/Library/Preferences/com.vvcam.plist";
+static NSString * const kPrefsPathUI     = @"/var/mobile/Library/Preferences/com.proximacore.mediaplaybackutils.plist";
+static NSString * const kNotifyLegacy    = @"com.vvcam/settingschanged";
+static NSString * const kNotifyUI        = @"com.proximacore.mpu/cfg";
+
+// Дефолтные пути к медиа — пользователь просто кладёт файл в Documents.
+// Имя ОБЯЗАТЕЛЬНО строчными: vvcam.jpg / vvcam.mp4 и т.п.
+static NSArray<NSString *> *VVCamDefaultCandidates(void) {
+    return @[
+        @"/var/mobile/Documents/vvcam.mp4",
+        @"/var/mobile/Documents/vvcam.mov",
+        @"/var/mobile/Documents/vvcam.m4v",
+        @"/var/mobile/Documents/vvcam.jpg",
+        @"/var/mobile/Documents/vvcam.jpeg",
+        @"/var/mobile/Documents/vvcam.png",
+    ];
+}
 
 @interface VVCamState ()
 @property (nonatomic, copy)   NSString *mediaPath;
@@ -55,7 +77,11 @@ static CVPixelBufferRef VVCamBufferFromImage(UIImage *img) {
 
 - (void)registerNotify {
     int token;
-    notify_register_dispatch(kNotify.UTF8String, &token, dispatch_get_main_queue(), ^(int t){
+    notify_register_dispatch(kNotifyLegacy.UTF8String, &token, dispatch_get_main_queue(), ^(int t){
+        [self reload];
+    });
+    int token2;
+    notify_register_dispatch(kNotifyUI.UTF8String, &token2, dispatch_get_main_queue(), ^(int t){
         [self reload];
     });
 }
@@ -64,23 +90,51 @@ static CVPixelBufferRef VVCamBufferFromImage(UIImage *img) {
     if (_imageBuffer) CVPixelBufferRelease(_imageBuffer);
 }
 
+// Объединяем две схемы preferences. Приоритет — у UI-схемы.
+- (NSDictionary *)loadMergedPrefs {
+    NSDictionary *legacy = [NSDictionary dictionaryWithContentsOfFile:kPrefsPathLegacy] ?: @{};
+    NSDictionary *uiPrefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPathUI]    ?: @{};
+
+    BOOL enabled = YES;
+    if (uiPrefs[@"enabled"])      enabled = [uiPrefs[@"enabled"] boolValue];
+    else if (legacy[@"Enabled"])  enabled = [legacy[@"Enabled"] boolValue];
+
+    // MediaPath может прийти из любого источника
+    NSString *path = uiPrefs[@"MediaPath"] ?: legacy[@"MediaPath"];
+
+    return @{ @"enabled": @(enabled), @"MediaPath": path ?: @"" };
+}
+
 - (void)reload {
     @synchronized (self) {
-        NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:kPrefsPath];
-        NSString *path = prefs[@"MediaPath"];
-        BOOL enabledPref = prefs[@"Enabled"] ? [prefs[@"Enabled"] boolValue] : YES;
-
-        self.mediaPath = path;
-        self.enabled = enabledPref && (path.length > 0);
+        NSDictionary *prefs = [self loadMergedPrefs];
+        NSString *path      = prefs[@"MediaPath"];
+        BOOL enabledPref    = [prefs[@"enabled"] boolValue];
 
         // reset old state
         if (_imageBuffer) { CVPixelBufferRelease(_imageBuffer); _imageBuffer = NULL; }
         self.reader = nil; self.trackOutput = nil; self.videoURL = nil;
 
-        if (path.length == 0) { self.enabled = NO; return; }
+        // Если в prefs пусто — пробуем дефолтные кандидаты в Documents
+        if (path.length == 0) {
+            for (NSString *c in VVCamDefaultCandidates()) {
+                if ([[NSFileManager defaultManager] fileExistsAtPath:c]) { path = c; break; }
+            }
+        }
+
+        self.mediaPath = path;
+        self.enabled   = enabledPref && (path.length > 0);
+
+        NSLog(@"[VVCAM] reload media=%@ enabled=%d proc=%@",
+              path ?: @"<none>", (int)self.enabled,
+              [NSProcessInfo processInfo].processName);
+
+        if (!self.enabled) return;
 
         NSString *ext = path.pathExtension.lowercaseString;
-        self.isVideo = ([ext isEqualToString:@"mp4"] || [ext isEqualToString:@"mov"] || [ext isEqualToString:@"m4v"]);
+        self.isVideo = ([ext isEqualToString:@"mp4"]
+                        || [ext isEqualToString:@"mov"]
+                        || [ext isEqualToString:@"m4v"]);
 
         if (self.isVideo) {
             self.videoURL = [NSURL fileURLWithPath:path];
@@ -88,7 +142,10 @@ static CVPixelBufferRef VVCamBufferFromImage(UIImage *img) {
         } else {
             UIImage *img = [UIImage imageWithContentsOfFile:path];
             _imageBuffer = VVCamBufferFromImage(img);
-            if (!_imageBuffer) self.enabled = NO;
+            if (!_imageBuffer) {
+                NSLog(@"[VVCAM] failed to decode image at %@", path);
+                self.enabled = NO;
+            }
         }
     }
 }
