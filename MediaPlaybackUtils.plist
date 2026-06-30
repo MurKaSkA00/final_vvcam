@@ -1,3 +1,4 @@
+Файл: MediaPlaybackUtils.plist
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -6,14 +7,227 @@
     <dict>
         <key>Mode</key>
         <string>Any</string>
-        <key>Frameworks</key>
+        <key>Bundles</key>
         <array>
-            <string>AVFoundation</string>
-            <string>CoreMedia</string>
-            <string>CoreVideo</string>
-            <string>WebKit</string>
-            <string>Vision</string>
-            <string>VisionKit</string>
+            <!-- ===== Apple System / Frameworks ===== -->
+            <string>com.apple.camera</string>
+            <string>com.apple.mobileslideshow</string>
+            <string>com.apple.facetime</string>
+            <string>com.apple.MobileSMS</string>
+            <string>com.apple.mobilesafari</string>
+            <string>com.apple.avfoundation</string>
+            <string>com.apple.coremedia</string>
+            <string>com.apple.corevideo</string>
+            <string>com.apple.WebKit</string>
+            <string>com.apple.vision.framework</string>
+            <string>com.apple.VisionKit</string>
+            <string>com.apple.AVKit</string>
+            <string>com.apple.PhotosUI</string>
+
+            <!-- ===== Social Networks (USA) ===== -->
+            <string>com.toyopagroup.picaboo</string>            <!-- Snapchat -->
+            <string>com.burbn.instagram</string>                 <!-- Instagram -->
+            <string>com.burbn.barcelona</string>                 <!-- Threads -->
+            <string>com.facebook.Facebook</string>               <!-- Facebook -->
+            <string>com.facebook.Messenger</string>              <!-- Messenger -->
+            <string>com.atebits.Tweetie2</string>                <!-- X / Twitter -->
+            <string>com.zhiliaoapp.musically</string>            <!-- TikTok (US) -->
+            <string>com.reddit.Reddit</string>                   <!-- Reddit -->
+            <string>pinterest</string>                            <!-- Pinterest -->
+            <string>com.linkedin.LinkedIn</string>                <!-- LinkedIn -->
+            <string>com.tumblr.tumblr</string>                    <!-- Tumblr -->
+            <string>AlexisBarreyat.BeReal</string>                <!-- BeReal -->
+            <string>com.lockets.locket</string>                   <!-- Locket -->
+            <string>xyz.blueskyweb.app</string>                   <!-- Bluesky -->
+            <string>org.joinmastodon.app</string>                 <!-- Mastodon -->
+            <string>com.x.grok</string>                           <!-- Grok / xAI -->
+            <string>com.joinclubhouse.clubhouse</string>          <!-- Clubhouse -->
+
+            <!-- ===== Messengers (used in US) ===== -->
+            <string>net.whatsapp.WhatsApp</string>                <!-- WhatsApp -->
+            <string>ph.telegra.Telegraph</string>                 <!-- Telegram -->
+            <string>org.telegram.messenger</string>               <!-- Telegram Messenger -->
+            <string>com.hammerandchisel.discord</string>          <!-- Discord -->
+            <string>com.tinyspeck.chatlyio</string>               <!-- Slack -->
+            <string>com.microsoft.skype.teams</string>            <!-- MS Teams -->
+            <string>com.skype.skype</string>                      <!-- Skype -->
+            <string>com.viber</string>                            <!-- Viber -->
+            <string>org.whispersystems.signal</string>            <!-- Signal -->
+            <string>com.kik.chat</string>                         <!-- Kik -->
+            <string>com.google.Duo</string>                       <!-- Google Meet (Duo) -->
+            <string>com.google.Meet</string>                      <!-- Google Meet -->
+            <string>us.zoom.videomeetings</string>                <!-- Zoom -->
+            <string>com.cisco.webexmeetings</string>              <!-- Webex -->
+            <string>com.marcopolo.video</string>                  <!-- Marco Polo -->
+            <string>com.lifeonair.houseparty</string>             <!-- Houseparty -->
+
+            <!-- ===== Dating (USA) ===== -->
+            <string>com.cardify.tinder</string>                   <!-- Tinder -->
+            <string>com.bumble.app</string>                       <!-- Bumble -->
+            <string>co.match.matchapp</string>                    <!-- Hinge -->
+            <string>com.match.match</string>                      <!-- Match.com -->
+            <string>com.okcupid.app</string>                      <!-- OkCupid -->
+            <string>com.grindrguy.grindrx</string>                <!-- Grindr -->
+            <string>com.bma.Badoo</string>                        <!-- Badoo -->
+            <string>com.pof.pof</string>                          <!-- Plenty of Fish -->
+            <string>com.coffeemeetsbagel.coffeemeetsbagel</string><!-- Coffee Meets Bagel -->
+            <string>com.eharmony.app</string>                     <!-- eHarmony -->
+
+            <!-- ===== US Banks (Big Banks) ===== -->
+            <string>com.chase.sig.Chase</string>                  <!-- Chase -->
+            <string>com.infonow.bofa</string>                     <!-- Bank of America -->
+            <string>com.wf.wellsfargomobile</string>              <!-- Wells Fargo -->
+            <string>com.citi.citimobile</string>                  <!-- Citibank -->
+            <string>com.capitalone.enterprisemobilebanking</string><!-- Capital One -->
+            <string>com.usbank.usbankmobileapp</string>           <!-- U.S. Bank -->
+            <string>com.pnc.PNCMobileBanking</string>             <!-- PNC -->
+            <string>com.truist.mobilebanking</string>             <!-- Truist -->
+            <string>com.regions.RegionsMobileBanking</string>     <!-- Regions -->
+            <string>com.suntrust.mobile</string>                  <!-- SunTrust -->
+            <string>com.discover.mobile</string>                  <!-- Discover -->
+            <string>com.americanexpress.amexservice</string>      <!-- American Express -->
+            <string>com.americanexpress.AmericanExpress</string>  <!-- Amex (alt) -->
+            <string>com.usaa.mobile</string>                      <!-- USAA -->
+            <string>com.navyfederal.android</string>              <!-- Navy Federal -->
+            <string>com.ally.AllyMobile</string>                  <!-- Ally Bank -->
+            <string>com.tdbank.tdbank</string>                    <!-- TD Bank -->
+            <string>com.huntington.mobile</string>                <!-- Huntington -->
+            <string>com.fifththird.mobilebanking</string>         <!-- Fifth Third -->
+            <string>com.keybank.mobile</string>                   <!-- KeyBank -->
+            <string>com.citizensbank.mobile</string>              <!-- Citizens Bank -->
+            <string>com.bbt.iphone</string>                       <!-- BB&T -->
+            <string>com.mtb.mobilebanking</string>                <!-- M&T Bank -->
+            <string>com.fnbo.fnbomobileapp</string>               <!-- First National Bank -->
+            <string>com.chime.chime</string>                      <!-- Chime -->
+            <string>com.varomoney.consumer</string>               <!-- Varo -->
+            <string>com.current.app</string>                      <!-- Current -->
+            <string>com.sofi.SoFiBank</string>                    <!-- SoFi -->
+            <string>com.albert.AlbertApp</string>                 <!-- Albert -->
+            <string>com.simplebank.SimpleBank</string>            <!-- Simple -->
+
+            <!-- ===== Payments / Fintech (US) ===== -->
+            <string>com.yourcompany.PPClient</string>             <!-- PayPal -->
+            <string>com.paypal.ppclient</string>                  <!-- PayPal alt -->
+            <string>com.venmo.TouchFree</string>                  <!-- Venmo -->
+            <string>com.squareup.cash</string>                    <!-- Cash App -->
+            <string>com.zellepay.zelle</string>                   <!-- Zelle -->
+            <string>com.revolut.RevolutApp</string>               <!-- Revolut -->
+            <string>com.transferwise.app</string>                 <!-- Wise -->
+            <string>com.affirm.affirm</string>                    <!-- Affirm -->
+            <string>com.klarna.shopping</string>                  <!-- Klarna -->
+            <string>com.afterpay.app</string>                     <!-- Afterpay -->
+            <string>com.creditkarma.creditkarma</string>          <!-- Credit Karma -->
+            <string>com.creditsesame.CreditSesame</string>        <!-- Credit Sesame -->
+            <string>com.experian.experianapp</string>             <!-- Experian -->
+            <string>com.intuit.mint.iphone</string>               <!-- Mint -->
+            <string>com.intuit.turbotax.mobile</string>           <!-- TurboTax -->
+            <string>com.hrblock.haveourback</string>              <!-- H&R Block -->
+            <string>com.acorns.app</string>                       <!-- Acorns -->
+            <string>com.stash.stash</string>                      <!-- Stash -->
+
+            <!-- ===== Investments / Stocks (US) ===== -->
+            <string>com.robinhood.release.Robinhood</string>      <!-- Robinhood -->
+            <string>com.webull.webullStock</string>               <!-- Webull -->
+            <string>com.fidelity.iphone</string>                  <!-- Fidelity -->
+            <string>com.schwab.mobile</string>                    <!-- Charles Schwab -->
+            <string>com.tdameritrade.iPhoneTrader</string>        <!-- TD Ameritrade -->
+            <string>com.etrade.mobilepro</string>                 <!-- E*TRADE -->
+            <string>com.interactivebrokers.IBKRMobile</string>    <!-- Interactive Brokers -->
+            <string>com.vanguard.vgIphoneApp</string>             <!-- Vanguard -->
+            <string>com.merrilledge.iphone</string>               <!-- Merrill Edge -->
+            <string>com.publica.publica</string>                  <!-- Public.com -->
+            <string>com.moomoo.moomoo</string>                    <!-- Moomoo -->
+            <string>com.etoro.etoro</string>                      <!-- eToro US -->
+            <string>com.sofi.invest</string>                      <!-- SoFi Invest -->
+            <string>com.tdbank.tdmobile.investing</string>        <!-- TD Investing -->
+
+            <!-- ===== Crypto Exchanges / Wallets (US) ===== -->
+            <string>com.vilcsak.bitcoins2</string>                <!-- Coinbase -->
+            <string>com.coinbase.Wallet</string>                  <!-- Coinbase Wallet -->
+            <string>org.toshi</string>                            <!-- Coinbase Wallet (alt) -->
+            <string>com.gemini.exchange.ios.app</string>          <!-- Gemini -->
+            <string>com.kraken.invest.app</string>                <!-- Kraken -->
+            <string>com.krakenfx.app</string>                     <!-- Kraken (alt) -->
+            <string>co.mona.app</string>                          <!-- Crypto.com -->
+            <string>com.bitfinex.bfxapp</string>                  <!-- Bitfinex -->
+            <string>com.bitstamp.iphone</string>                  <!-- Bitstamp -->
+            <string>com.cashapp.bitcoin</string>                  <!-- Cash App Bitcoin -->
+            <string>com.paxful.paxful</string>                    <!-- Paxful -->
+            <string>com.swanbitcoin.swan</string>                 <!-- Swan Bitcoin -->
+            <string>com.river.river</string>                      <!-- River -->
+            <string>com.strikeapp.strike</string>                 <!-- Strike -->
+            <string>io.metamask.MetaMask</string>                 <!-- MetaMask -->
+            <string>com.sixdays.trust</string>                    <!-- Trust Wallet -->
+            <string>com.exodus.app</string>                       <!-- Exodus -->
+            <string>com.phantom.app</string>                      <!-- Phantom -->
+            <string>com.blockchain.iphone</string>                <!-- Blockchain.com -->
+            <string>com.zengo.wallet</string>                     <!-- ZenGo -->
+            <string>im.rainbow.rainbow</string>                   <!-- Rainbow -->
+            <string>com.zerion.zerion</string>                    <!-- Zerion -->
+            <string>com.uniswap.mobile</string>                   <!-- Uniswap -->
+            <string>com.ledger.live</string>                      <!-- Ledger Live -->
+            <string>com.atomicwallet.AtomicWallet</string>        <!-- Atomic Wallet -->
+            <string>com.bitget.app</string>                       <!-- Bitget -->
+            <string>com.kubi.kucoin</string>                      <!-- KuCoin -->
+            <string>com.bybit.app</string>                        <!-- Bybit -->
+            <string>com.okinc.okex.international</string>         <!-- OKX -->
+            <string>com.huobi.proapp</string>                     <!-- Huobi / HTX -->
+            <string>com.mexc.exchange</string>                    <!-- MEXC -->
+            <string>com.gateio.gate</string>                      <!-- Gate.io -->
+            <string>com.crypto-com.defi-wallet</string>           <!-- Crypto.com DeFi -->
+
+            <!-- ===== Video / Streaming (US) ===== -->
+            <string>com.google.ios.youtube</string>               <!-- YouTube -->
+            <string>com.google.ios.youtubemusic</string>          <!-- YouTube Music -->
+            <string>com.google.ios.youtubekids</string>           <!-- YouTube Kids -->
+            <string>com.netflix.Netflix</string>                  <!-- Netflix -->
+            <string>com.amazon.aiv.AIVApp</string>                <!-- Prime Video -->
+            <string>com.disney.disneyplus</string>                <!-- Disney+ -->
+            <string>com.hulu.plus</string>                        <!-- Hulu -->
+            <string>com.wbd.stream</string>                       <!-- Max (HBO) -->
+            <string>com.cbs.ott</string>                          <!-- Paramount+ -->
+            <string>com.peacocktv.peacock</string>                <!-- Peacock -->
+            <string>com.apple.tv</string>                         <!-- Apple TV -->
+            <string>com.apple.Music</string>                      <!-- Apple Music -->
+            <string>com.spotify.client</string>                   <!-- Spotify -->
+            <string>tv.twitch</string>                            <!-- Twitch -->
+            <string>com.vimeo</string>                            <!-- Vimeo -->
+            <string>com.kick.kick</string>                        <!-- Kick -->
+            <string>com.rumble.rumble</string>                    <!-- Rumble -->
+
+            <!-- ===== Camera / Photo / Video Editing ===== -->
+            <string>com.vsco.cam</string>                         <!-- VSCO -->
+            <string>com.niksoftware.snapseed</string>             <!-- Snapseed -->
+            <string>com.lightricks.facetune-free</string>         <!-- Facetune -->
+            <string>com.lightricks.Videoleap</string>             <!-- Videoleap -->
+            <string>com.picsart.studio</string>                   <!-- PicsArt -->
+            <string>net.canva.canvaeditor</string>                <!-- Canva -->
+            <string>com.instashot</string>                        <!-- InShot -->
+            <string>com.lemon.lvoverseas</string>                 <!-- CapCut -->
+            <string>com.adobe.lightroomcc</string>                <!-- Lightroom -->
+            <string>com.adobe.photoshop.express</string>          <!-- Photoshop Express -->
+            <string>com.adobe.PSCamera</string>                   <!-- Photoshop Camera -->
+            <string>com.adobe.AdobePremiereRush</string>          <!-- Premiere Rush -->
+            <string>com.taptaptap.cameraplus</string>             <!-- Camera+ -->
+            <string>com.chroma.code.Halide</string>               <!-- Halide -->
+            <string>com.cocologics.ProCamera</string>             <!-- ProCamera -->
+            <string>com.cinegenix.FilmicPro</string>              <!-- Filmic Pro -->
+            <string>com.luma-touch.LumaFusion</string>            <!-- LumaFusion -->
+            <string>com.frontrow.vlog</string>                    <!-- VN Editor -->
+            <string>com.b612.kaji</string>                        <!-- B612 -->
+            <string>com.linecorp.b612.android</string>            <!-- B612 (alt) -->
+            <string>com.snowcorp.SnowApp</string>                 <!-- SNOW -->
+            <string>com.gopro.GoPro</string>                      <!-- GoPro Quik -->
+
+            <!-- ===== KYC / ID Verification (used by US fintech) ===== -->
+            <string>com.sumsub.android</string>
+            <string>com.onfido.sdk</string>
+            <string>com.jumio.netverify</string>
+            <string>com.veriff.veriff</string>
+            <string>com.persona.SDK</string>
+            <string>com.id.me.id-me</string>
+            <string>com.socure.socureidplus</string>
+            <string>com.plaid.PlaidLink</string>                  <!-- Plaid -->
         </array>
     </dict>
 </dict>
