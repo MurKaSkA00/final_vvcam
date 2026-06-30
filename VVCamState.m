@@ -70,11 +70,6 @@ static CVPixelBufferRef VVCamBufferFromImage(UIImage *img) {
         NSString *path = prefs[@"MediaPath"];
         BOOL enabledPref = prefs[@"Enabled"] ? [prefs[@"Enabled"] boolValue] : YES;
 
-        if (path.length == 0) {
-            if ([[NSFileManager defaultManager] fileExistsAtPath:kDefVideo]) path = kDefVideo;
-            else if ([[NSFileManager defaultManager] fileExistsAtPath:kDefImage]) path = kDefImage;
-        }
-
         self.mediaPath = path;
         self.enabled = enabledPref && (path.length > 0);
 
