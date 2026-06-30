@@ -21,7 +21,7 @@ MediaPlaybackUtils_FILES = \
     SharedState.m
 
 MediaPlaybackUtils_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-variable
-MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore ImageIO MobileCoreServices
+MediaPlaybackUtils_FRAMEWORKS = UIKit AVFoundation CoreMedia CoreVideo CoreImage QuartzCore ImageIO MobileCoreServices Accelerate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
