@@ -1,32 +1,4 @@
-// WebRTCHooks.x - MediaPlaybackUtils v1.8.0
-// FIX 7 (v1.8.0): устранён крах Amazon/PayPal/банков/Instagram и т.п.
-// Симптом: EXC_BAD_ACCESS at 0x0 в swift_getSingletonMetadata →
-//          realizeAllClasses → objc_copyClassList → _CFInitialize.
-// Причина:
-//   1) В %ctor стоял dispatch_after(1.0s) на QOS_CLASS_USER_INITIATED, который
-//      вызывал _webrtc_scanAllClasses() → objc_copyClassList() из фонового
-//      потока ПОКА главный ещё инициализирует Swift/Kotlin singletons.
-//      У Amazon (Kotlin/Native KMM) и PayPal (Swift+CoreML) это гонка
-//      Swift runtime ↔ Obj-C runtime: realizeAllClasses пытается достать
-//      singleton metadata, которой ещё нет → NULL → SIGSEGV.
-//   2) class_addMethod на Swift-классах с типовой строкой Obj-C ломает
-//      Swift class layout — пропускаем Swift/Kotlin-классы.
-//   3) Hooked даже в банках/шопинге, где WebRTC физически отсутствует —
-//      бесполезный риск. Убираем эти процессы.
-//
-// Что изменилось:
-//   - НЕТ dispatch_after-сканера в %ctor (главная причина крашей).
-//   - Скан запускается ТОЛЬКО при AVCaptureSession.startRunning, всегда
-//     с главного потока, через dispatch_async(main_queue), один раз
-//     на сессию (через флаг _webrtc_scanDone).
-//   - Пропускаем Swift/Kotlin-классы: _Tt*, _$s*, имена с '.' / '$' /
-//     не-ASCII символами, а также служебные __NS*/_NS*.
-//   - Список ранних %ctor early-return расширен: не загружаемся в
-//     процессы, заведомо не использующие AVCaptureVideoDataOutput
-//     (банки, маркетплейсы, KYC, почта, такси и т.п. — они либо
-//     используют AVCapturePhoto, либо VNDocumentCameraView, либо
-//     встроенные ML-SDK без classic capture-pipeline).
-
+// WebRTCHooks.x - MediaPlaybackUtils v2.1.0 "All Apps"
 #import <Foundation/Foundation.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
@@ -38,50 +10,32 @@
 
 static atomic_bool _webrtc_scanDone = ATOMIC_VAR_INIT(false);
 
-// FIX 7: явно отбраковываем Swift/Kotlin/служебные классы — на них
-// class_addMethod может развалить Swift-layout и вызвать swift_getSingletonMetadata.
-static BOOL _webrtc_isUnsafeClassName(const char *cn) {
-    if (!cn || cn[0] == 0) return YES;
-    // Swift mangled: _Tt..., _$s..., _$S...
-    if (cn[0] == '_' && (cn[1] == 'T' || cn[1] == '$')) return YES;
-    // KMM/Kotlin-Native:  имя содержит '.' или ':'
-    // Swift dotted name: "Module.Class"
-    for (const char *p = cn; *p; p++) {
-        unsigned char c = (unsigned char)*p;
-        if (c == '.' || c == '$' || c == ':' || c >= 0x80) return YES;
-    }
-    // системные служебные
-    if (strncmp(cn, "__NS", 4) == 0) return YES;
-    if (strncmp(cn, "_NS",  3) == 0) return YES;
-    if (strncmp(cn, "OS_",  3) == 0) return YES;
-    return NO;
-}
-
 static BOOL _webrtc_isInterestingClass(const char *cn) {
     if (!cn) return NO;
-    // Жёстко: только классы с явно WebRTC-ишными именами.
-    // Убраны слишком общие маски hasSuffix:VideoOutput / CaptureDelegate /
-    // SampleBufferDelegate — они ловили пользовательские классы приложений
-    // (Amazon/PayPal/Instagram) и провоцировали свизл там, где не нужно.
-    return (strstr(cn, "WebCore")           ||
-            strstr(cn, "WebRTC")            ||
-            strstr(cn, "WKVideoCapture")    ||
-            strstr(cn, "WKCapture")         ||
-            strstr(cn, "WKWebRTC")          ||
-            strstr(cn, "RTCCamera")         ||
-            strstr(cn, "RTCVideoCapture")   ||
-            strstr(cn, "RealtimeIncoming")  ||
-            strstr(cn, "RealtimeOutgoing")  ||
-            strstr(cn, "AVVideoCaptureSource"));
+    if (strstr(cn, "Camera"))           return YES;
+    if (strstr(cn, "Capture"))          return YES;
+    if (strstr(cn, "VideoOutput"))      return YES;
+    if (strstr(cn, "SampleBuffer"))     return YES;
+    if (strstr(cn, "VideoFrame"))       return YES;
+    if (strstr(cn, "WebRTC"))           return YES;
+    if (strstr(cn, "RTCVideo"))         return YES;
+    if (strstr(cn, "Liveness"))         return YES;
+    if (strstr(cn, "KYC"))              return YES;
+    if (strstr(cn, "FaceCapture"))      return YES;
+    return NO;
 }
 
 static void _webrtc_hookClass(Class cls) {
     if (!cls) return;
     const char *cn = class_getName(cls);
-    if (_webrtc_isUnsafeClassName(cn)) return;
+    if (_mpu_isUnsafeClassName(cn)) return;
     NSString *name = [NSString stringWithUTF8String:cn];
     if (!name) return;
 
+    if (!_mpu_globalHookedClasses) {
+        _mpu_globalHookedClasses = [NSMutableSet new];
+        _mpu_globalHookedLock    = [NSObject new];
+    }
     @synchronized(_mpu_globalHookedLock) {
         if ([_mpu_globalHookedClasses containsObject:name]) return;
     }
@@ -90,14 +44,19 @@ static void _webrtc_hookClass(Class cls) {
     Method m = class_getInstanceMethod(cls, sel);
     if (!m) return;
 
-    const char *types = method_getTypeEncoding(m);
-    if (!types) return;
+    Method mSuper = class_getInstanceMethod(class_getSuperclass(cls), sel);
+    if (m == mSuper) {
+        const char *types = method_getTypeEncoding(m);
+        if (!types) return;
+        if (!class_addMethod(cls, sel, method_getImplementation(m), types)) return;
+        m = class_getInstanceMethod(cls, sel);
+        if (!m) return;
+    }
+
     __block IMP capturedIMP = method_getImplementation(m);
 
     IMP newIMP = imp_implementationWithBlock(^(id self_,
-        AVCaptureOutput *output,
-        CMSampleBufferRef sb,
-        AVCaptureConnection *conn) {
+        AVCaptureOutput *output, CMSampleBufferRef sb, AVCaptureConnection *conn) {
 
         if (!_enabled) {
             ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
@@ -105,11 +64,21 @@ static void _webrtc_hookClass(Class cls) {
             return;
         }
 
-        CVPixelBufferRef src = NULL;
-        @synchronized(_v_lock) {
-            if (_lastBuffer) src = CVPixelBufferRetain(_lastBuffer);
+        CVPixelBufferRef raw = NULL;
+        @synchronized(_v_lock) { if (_lastBuffer) raw = CVPixelBufferRetain(_lastBuffer); }
+        if (!raw) {
+            ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
+                capturedIMP)(self_, sel, output, sb, conn);
+            return;
         }
 
+        OSType want = _mpu_outputPixelFormat(output);
+        if (want == 0 && sb) {
+            CVImageBufferRef ib = CMSampleBufferGetImageBuffer(sb);
+            if (ib) want = CVPixelBufferGetPixelFormatType(ib);
+        }
+        CVPixelBufferRef src = _mpu_convertPixelBuffer(raw, want);
+        CVPixelBufferRelease(raw);
         if (!src) {
             ((void(*)(id,SEL,AVCaptureOutput*,CMSampleBufferRef,AVCaptureConnection*))
                 capturedIMP)(self_, sel, output, sb, conn);
@@ -152,23 +121,12 @@ static void _webrtc_hookClass(Class cls) {
         CVPixelBufferRelease(src);
     });
 
-    BOOL added = class_addMethod(cls, sel, newIMP, types);
-    if (!added) {
-        IMP prev = class_replaceMethod(cls, sel, newIMP, types);
-        if (prev) capturedIMP = prev;
-        else {
-            Method m2 = class_getInstanceMethod(cls, sel);
-            if (m2) capturedIMP = method_getImplementation(m2);
-        }
-    }
+    method_setImplementation(m, newIMP);
 
-    @synchronized(_mpu_globalHookedLock) {
-        [_mpu_globalHookedClasses addObject:name];
-    }
+    @synchronized(_mpu_globalHookedLock) { [_mpu_globalHookedClasses addObject:name]; }
     NSLog(@"[MPU/WebRTC] Hooked: %@", name);
 }
 
-// FIX 7: ВСЕГДА на главном потоке. Один раз на процесс.
 static void _webrtc_scanAllClasses_mainThread(void) {
     bool expected = false;
     if (!atomic_compare_exchange_strong(&_webrtc_scanDone, &expected, true)) return;
@@ -181,8 +139,8 @@ static void _webrtc_scanAllClasses_mainThread(void) {
     for (unsigned int i = 0; i < count; i++) {
         Class cls = classes[i];
         const char *cn = class_getName(cls);
-        if (_webrtc_isUnsafeClassName(cn)) continue;
-        if (!_webrtc_isInterestingClass(cn))  continue;
+        if (_mpu_isUnsafeClassName(cn)) continue;
+        if (!_webrtc_isInterestingClass(cn)) continue;
         if (!class_getInstanceMethod(cls, sel)) continue;
         _webrtc_hookClass(cls);
     }
@@ -203,58 +161,15 @@ static void _webrtc_scanAllClasses_mainThread(void) {
 - (void)startRunning {
     %orig;
     if (!_enabled) return;
-    // FIX 7: только main queue, не QOS_CLASS_USER_INTERACTIVE из фона.
     dispatch_async(dispatch_get_main_queue(), ^{
         _webrtc_scanAllClasses_mainThread();
     });
 }
 %end
 
-// FIX 7: процессы, в которых WebRTC точно отсутствует → не загружаемся
-static BOOL _webrtc_isBlockedProcess(NSString *bid) {
-    if (!bid) return YES;
-    static NSArray *blocked = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        blocked = @[
-            // Apple system / browsers
-            @"com.apple.springboard", @"com.apple.mediaserverd",
-            @"com.apple.assetsd",      @"com.apple.cameracaptured",
-            @"com.apple.WebKit",       @"com.apple.mobilesafari",
-            @"com.google.chrome",      @"com.brave.ios",
-            @"com.opera",              @"com.microsoft.msedge",
-            @"com.firefox.ios",        @"org.mozilla.ios",
-            @"com.ddg.ios",            @"com.kagi",
-            // Shopping / banks / payments — нет WebRTC, ловили краши
-            @"com.amazon.Amazon",      @"com.ebay",
-            @"com.paypal.PPClient",    @"com.venmo.Venmo",
-            @"com.cashapp.squarecash", @"com.konylabs.westernunion",
-            @"com.chase.sig.ios",      @"com.bankofamerica.BofAMobileBanking",
-            @"com.wellsfargo.wellsfargomobile", @"com.key.KeyBank",
-            @"com.citigroup.citimobile",
-            // Mail / docs / scanners — то же
-            @"com.google.Gmail",       @"com.microsoft.Office.Outlook",
-            @"com.apple.mobilemail",   @"com.adobe.scan.ios",
-            @"com.microsoft.Office.Lens", @"com.apple.Notes",
-            @"com.readdle.scanner",    @"net.doo.DMobile",
-            // Taxi / learning
-            @"com.ubercab.UberClient", @"com.lyft.ios",
-            @"com.duolingo.duolingo",
-        ];
-    });
-    for (NSString *b in blocked) {
-        if ([bid hasPrefix:b] || [bid isEqualToString:b]) return YES;
-    }
-    return NO;
-}
-
 %ctor {
     @autoreleasepool {
-        NSString *bid  = [[NSBundle mainBundle] bundleIdentifier];
-        NSString *path = [[NSBundle mainBundle] bundlePath];
-        if (!bid) return;
-        if (_webrtc_isBlockedProcess(bid)) return;
-        if ([path hasPrefix:@"/usr/"]) return;
+        if (!_mpu_processIsLoadable()) return;
 
         if (!_v_lock) _v_lock = [NSObject new];
         if (!_mpu_globalHookedClasses) {
@@ -263,10 +178,6 @@ static BOOL _webrtc_isBlockedProcess(NSString *bid) {
         }
 
         %init;
-        NSLog(@"[MPU/WebRTC] Loaded for %@", bid);
-
-        // FIX 7: НЕТ dispatch_after-скана. Скан произойдёт только когда
-        // приложение реально откроет камеру → AVCaptureSession.startRunning.
+        NSLog(@"[MPU/WebRTC] Loaded for %@", [[NSBundle mainBundle] bundleIdentifier]);
     }
 }
-
