@@ -1,9 +1,12 @@
-// SharedState.m - MediaPlaybackUtils v1.8.4
+// SharedState.m - MediaPlaybackUtils v2.1.0 "All Apps"
 // Единственное физическое хранилище общих глобалов + общие helper-функции.
 
 #import "SharedState.h"
 #import <Foundation/Foundation.h>
 #import <CoreImage/CoreImage.h>
+#import <CoreVideo/CoreVideo.h>
+#import <AVFoundation/AVFoundation.h>
+#import <Accelerate/Accelerate.h>
 
 BOOL              _enabled         = NO;
 CVPixelBufferRef  _lastBuffer      = NULL;
@@ -28,12 +31,10 @@ BOOL _mpu_processIsLoadable(void) {
 
         if (!bid || bid.length == 0) { cached = NO; return; }
 
-        // 1) App-extensions (.appex / NSExtension)
         if ([path containsString:@".appex/"] ||
             [path hasSuffix:@".appex"])               { cached = NO; return; }
         if (info[@"NSExtension"] != nil)              { cached = NO; return; }
 
-        // 2) Системные пути (демоны / сервисы)
         if ([path hasPrefix:@"/usr/"])                { cached = NO; return; }
         if ([path hasPrefix:@"/System/"])             { cached = NO; return; }
         if ([path hasPrefix:@"/Library/"])            { cached = NO; return; }
@@ -43,23 +44,13 @@ BOOL _mpu_processIsLoadable(void) {
         if ([path hasPrefix:@"/var/jb/System/"])      { cached = NO; return; }
         if ([path hasPrefix:@"/var/jb/Library/"])     { cached = NO; return; }
 
-        // 3) Все Apple-системные процессы
         if ([bid hasPrefix:@"com.apple."])            { cached = NO; return; }
 
-        // 4) Jailbreak / package managers / debuggers
         NSArray *jb = @[
-            @"org.coolstar.",
-            @"com.silverhawkx.sileo",
-            @"xyz.willy.Zebra",
-            @"com.tigisoftware.",
-            @"com.sparklabs.",
-            @"cool.palera1n",
-            @"com.opa334.",
-            @"com.palera1n",
-            @"org.theos.",
-            @"science.xnu.",
-            @"com.checkra.",
-            @"com.unc0ver.",
+            @"org.coolstar.", @"com.silverhawkx.sileo", @"xyz.willy.Zebra",
+            @"com.tigisoftware.", @"com.sparklabs.", @"cool.palera1n",
+            @"com.opa334.", @"com.palera1n", @"org.theos.",
+            @"science.xnu.", @"com.checkra.", @"com.unc0ver.",
         ];
         for (NSString *p in jb) {
             if ([bid hasPrefix:p] || [bid isEqualToString:p]) {
@@ -67,7 +58,6 @@ BOOL _mpu_processIsLoadable(void) {
             }
         }
 
-        // 5) Имя исполняемого файла — известные демоны
         NSString *exeName = exe.lastPathComponent ?: @"";
         NSArray  *daemons = @[
             @"navd", @"destinationd", @"mapspushd", @"locationd",
@@ -91,36 +81,27 @@ BOOL _mpu_processIsLoadable(void) {
 }
 
 // =============================================================================
-// Единая проверка "опасных" имён классов (Swift/Kotlin/служебные).
+// v2.1.0: РАЗРЕШАЕМ Swift/Kotlin-классы.
 // =============================================================================
 BOOL _mpu_isUnsafeClassName(const char *cn) {
     if (!cn || cn[0] == 0) return YES;
-    // Swift mangled: _Tt..., _$s..., _$S...
-    if (cn[0] == '_' && (cn[1] == 'T' || cn[1] == '$')) return YES;
-    // Swift dotted "Module.Class" / Kotlin-Native ":" / '$' / non-ASCII
     for (const char *p = cn; *p; p++) {
         unsigned char c = (unsigned char)*p;
-        if (c == '.' || c == '$' || c == ':' || c >= 0x80) return YES;
+        if (c < 0x20) return YES;          // нечитаемые символы
     }
-    if (strncmp(cn, "__NS", 4) == 0) return YES;
-    if (strncmp(cn, "_NS",  3) == 0) return YES;
-    if (strncmp(cn, "OS_",  3) == 0) return YES;
-    // Vision-/VisionKit-классы — там бывают proxy под капотом
-    if (strncmp(cn, "VK", 2) == 0 && cn[2] >= 'A' && cn[2] <= 'Z') return YES;
+    if (strncmp(cn, "__NSCF",     6) == 0) return YES;
+    if (strncmp(cn, "__NSDictI",  9) == 0) return YES;
+    if (strncmp(cn, "__NSArrayI", 10) == 0) return YES;
+    if (strncmp(cn, "OS_",        3) == 0) return YES;
     return NO;
 }
 
-// =============================================================================
-// Безопасная ленивая инициализация CIContext.
-// Metal → software fallback. Не вызывать из %ctor!
-// =============================================================================
 CIContext *_mpu_ciContextShared(void) {
     static CIContext *ctx = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        @try {
-            ctx = [CIContext contextWithOptions:nil];
-        } @catch (__unused NSException *e) { ctx = nil; }
+        @try { ctx = [CIContext contextWithOptions:nil]; }
+        @catch (__unused NSException *e) { ctx = nil; }
         if (!ctx) {
             @try {
                 ctx = [CIContext contextWithOptions:@{
@@ -130,4 +111,58 @@ CIContext *_mpu_ciContextShared(void) {
         }
     });
     return ctx;
+}
+
+static CVPixelBufferRef _mpu_makeEmpty(size_t w, size_t h, OSType fmt) {
+    NSDictionary *attrs = @{
+        (id)kCVPixelBufferPixelFormatTypeKey:            @(fmt),
+        (id)kCVPixelBufferIOSurfacePropertiesKey:        @{},
+        (id)kCVPixelBufferCGImageCompatibilityKey:       @YES,
+        (id)kCVPixelBufferCGBitmapContextCompatibilityKey: @YES,
+        (id)kCVPixelBufferWidthKey:                      @(w),
+        (id)kCVPixelBufferHeightKey:                     @(h),
+    };
+    CVPixelBufferRef pb = NULL;
+    CVPixelBufferCreate(kCFAllocatorDefault, w, h, fmt,
+                        (__bridge CFDictionaryRef)attrs, &pb);
+    return pb;
+}
+
+CVPixelBufferRef _mpu_convertPixelBuffer(CVPixelBufferRef src, OSType targetFormat) {
+    if (!src) return NULL;
+    OSType srcFmt = CVPixelBufferGetPixelFormatType(src);
+    if (targetFormat == 0 || srcFmt == targetFormat) {
+        return (CVPixelBufferRef)CFRetain(src);
+    }
+
+    size_t w = CVPixelBufferGetWidth(src);
+    size_t h = CVPixelBufferGetHeight(src);
+    CVPixelBufferRef dst = _mpu_makeEmpty(w, h, targetFormat);
+    if (!dst) return (CVPixelBufferRef)CFRetain(src);
+
+    CIContext *ctx = _mpu_ciContextShared();
+    if (!ctx) { CVPixelBufferRelease(dst); return (CVPixelBufferRef)CFRetain(src); }
+    @try {
+        CIImage *ci = [CIImage imageWithCVPixelBuffer:src];
+        if (ci) {
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+            [ctx render:ci toCVPixelBuffer:dst bounds:ci.extent colorSpace:cs];
+            CGColorSpaceRelease(cs);
+            return dst;
+        }
+    } @catch (__unused NSException *e) {}
+    CVPixelBufferRelease(dst);
+    return (CVPixelBufferRef)CFRetain(src);
+}
+
+OSType _mpu_outputPixelFormat(id output) {
+    if (!output) return 0;
+    @try {
+        if (![output respondsToSelector:@selector(videoSettings)]) return 0;
+        NSDictionary *vs = [output performSelector:@selector(videoSettings)];
+        if (![vs isKindOfClass:[NSDictionary class]]) return 0;
+        NSNumber *n = vs[(id)kCVPixelBufferPixelFormatTypeKey];
+        if ([n isKindOfClass:[NSNumber class]]) return (OSType)n.unsignedIntValue;
+    } @catch (__unused NSException *e) {}
+    return 0;
 }
