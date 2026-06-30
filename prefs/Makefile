@@ -11,12 +11,5 @@ MediaPlaybackUtils_FRAMEWORKS = UIKit Foundation
 MediaPlaybackUtils_INSTALL_PATH = /Library/PreferenceBundles
 MediaPlaybackUtils_CFLAGS = -fobjc-arc
 MediaPlaybackUtils_LDFLAGS += -undefined dynamic_lookup
-MediaPlaybackUtils_BUNDLE_INFO_PLIST = Info.plist
 
 include $(THEOS_MAKE_PATH)/bundle.mk
-
-internal-stage::
-	$(ECHO_NOTHING)mkdir -p $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences$(ECHO_END)
-	$(ECHO_NOTHING)cp entry.plist $(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/MediaPlaybackUtils.plist$(ECHO_END)
-	$(ECHO_NOTHING)mkdir -p $(THEOS_STAGING_DIR)/Library/PreferenceBundles/MediaPlaybackUtils.bundle$(ECHO_END)
-	$(ECHO_NOTHING)cp Info.plist $(THEOS_STAGING_DIR)/Library/PreferenceBundles/MediaPlaybackUtils.bundle/Info.plist$(ECHO_END)
